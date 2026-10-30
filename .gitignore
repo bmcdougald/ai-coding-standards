@@ -1,0 +1,32 @@
+# Node
+node_modules/
+dist/
+build/
+coverage/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pyright/
+.ruff_cache/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# VS Code local settings
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Security scan reports
+gitleaks-report.json
+trivy-report.json
+semgrep-report.json

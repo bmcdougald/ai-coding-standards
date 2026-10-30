@@ -1,0 +1,6 @@
+ruff
+pyright
+pytest
+pip-audit
+pre-commit
+semgrep
