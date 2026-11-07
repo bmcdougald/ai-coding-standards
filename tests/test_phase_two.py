@@ -333,9 +333,10 @@ class PhaseTwoTests(unittest.TestCase):
                 bootstrap.scaffold(root, {"python"}, ci=True)
             self.assertIn("permissions:\n  contents: read", workflow.read_text())
             workflow.write_text("name: existing\n")
-            with self.assertRaisesRegex(ValueError, "manual reconciliation"):
+            with contextlib.redirect_stdout(io.StringIO()):
                 bootstrap.scaffold(root, {"python"}, ci=True)
             self.assertEqual(workflow.read_text(), "name: existing\n")
+            self.assertTrue((root / ".quality/ci-adapters/github-quality.yml").exists())
 
     def test_offline_scanning_rejects_unpinned_registry_rules(self):
         with tempfile.TemporaryDirectory() as temp:

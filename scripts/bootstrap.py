@@ -32,6 +32,11 @@ if integration_spec is None or integration_spec.loader is None:
     raise RuntimeError("Missing bundled tooling integration")
 integration = importlib.util.module_from_spec(integration_spec)
 integration_spec.loader.exec_module(integration)
+ci_spec = importlib.util.spec_from_file_location("configure_ci", SOURCE / "scripts/configure_ci.py")
+if ci_spec is None or ci_spec.loader is None:
+    raise RuntimeError("Missing bundled CI configuration")
+ci_configuration = importlib.util.module_from_spec(ci_spec)
+ci_spec.loader.exec_module(ci_configuration)
 EXCLUDED = {
     ".git",
     ".quality",
@@ -541,7 +546,7 @@ def tooling_baseline(
         "binaries": config["binaries"],
         "runtime": {
             ".quality/" + name: hashlib.sha256(files[".quality/" + name].encode()).hexdigest()
-            for name in ("install.py", "run.py", "jsonc.py", "maintenance.py")
+            for name in ("install.py", "run.py", "jsonc.py", "maintenance.py", "ci.py")
             if ".quality/" + name in files
         },
     }
@@ -606,6 +611,8 @@ def plan_tooling_update(
             files[".quality/maintenance.py"] = safe_tool_path(
                 target, ".quality/maintenance.py"
             ).read_text()
+            if safe_tool_path(target, ".quality/ci.py").exists():
+                files[".quality/ci.py"] = safe_tool_path(target, ".quality/ci.py").read_text()
         for project in config.get("node_projects", []):
             name = (Path(project) / "package.json").as_posix()
             path = safe_tool_path(target, name)
@@ -642,6 +649,8 @@ def plan_tooling_update(
     expected_runtime = {".quality/install.py", ".quality/run.py", ".quality/jsonc.py"}
     if baseline["runtime_api"] >= 2:
         expected_runtime.add(".quality/maintenance.py")
+        if ".quality/ci.py" in baseline["runtime"]:
+            expected_runtime.add(".quality/ci.py")
     if set(baseline["runtime"]) != expected_runtime:
         raise ValueError("Invalid suite runtime ownership record")
     edits: dict[str, str] = {}
@@ -1075,6 +1084,8 @@ def scaffold(
     inventory: list[dict[str, Any]] | None = None,
     hook_directory: Path | None = None,
     ci: bool = False,
+    ci_providers: set[str] | None = None,
+    ci_config: Path | None = None,
 ) -> None:
     python = "python" in languages
     node = bool(languages - {"python"})
@@ -1106,12 +1117,10 @@ def scaffold(
         add(name, merge_jsonc(path.read_text() if path.exists() else "{}\n", values))
 
     if ci:
-        workflow = ".github/workflows/quality.yml"
-        content = (SOURCE / "templates/quality/github-quality.yml").read_text()
-        path = safe_tool_path(target, workflow)
-        if path.exists() and path.read_text() != content:
-            raise ValueError("Existing CI workflow needs manual reconciliation: " + workflow)
-        add(workflow, content)
+        for name, content in ci_configuration.plan(
+            target, ci_providers or {"github"}, config_path=ci_config, source=SOURCE
+        ).items():
+            add(name, content)
     manifest = json.loads((SOURCE / "templates/quality/versions.json").read_text())
     manifest["languages"] = sorted(languages)
     manifest["semgrep_config"] = "p/security-audit"
@@ -1199,6 +1208,9 @@ def scaffold(
         "dist/",
         "build/",
         "coverage/",
+        "test-results/",
+        "playwright-report/",
+        "blob-report/",
         ".env",
         ".env.*",
         "!.env.example",
@@ -1303,6 +1315,9 @@ def scaffold(
                     "dist",
                     "build",
                     "coverage",
+                    "test-results/",
+                    "playwright-report/",
+                    "blob-report/",
                     "package-lock.json",
                     ".env",
                     ".env.*",
@@ -1592,6 +1607,7 @@ def scaffold(
             "package.json",
             "tsconfig.json",
             ".quality/config.json",
+            *({".quality/baseline.json"} if ci else set()),
             ".quality/schemas.json",
             ".vscode/settings.json",
             ".vscode/extensions.json",
@@ -1692,8 +1708,16 @@ def main() -> int:
         action="store_true",
         help="Generate files; install later with .quality/install.py",
     )
+    parser.add_argument("--ci", action="store_true", help="Add application CI (GitHub by default)")
+    parser.add_argument("--ci-providers", help="Comma-separated github,gitlab,jenkins adapters")
     parser.add_argument(
-        "--ci", action="store_true", help="Add a non-overwriting GitHub Actions quality workflow"
+        "--ci-only", action="store_true", help="Add CI to an already configured repo"
+    )
+    parser.add_argument(
+        "--ci-preview", action="store_true", help="Print proposed CI command JSON only"
+    )
+    parser.add_argument(
+        "--ci-config", type=Path, help="Reviewed CI command JSON; no command prompt"
     )
     parser.add_argument(
         "--update-tooling",
@@ -1721,8 +1745,18 @@ def main() -> int:
         help="Recover an interrupted update or a named .tools/backups/update-<id> backup",
     )
     args = parser.parse_args()
+    args.ci = bool(
+        args.ci or args.ci_providers or args.ci_only or args.ci_preview or args.ci_config
+    )
+    providers: set[str] = set((args.ci_providers or "github").split(","))
+    if args.ci and (not providers or providers - ci_configuration.PROVIDERS.keys()):
+        parser.error("--ci-providers must contain github, gitlab, and/or jenkins")
     if args.ci and args.detect_only:
         parser.error("--ci cannot be combined with --detect-only")
+    if (args.ci_only or args.ci_preview) and (
+        args.languages or args.existing_tools or args.configure_only
+    ):
+        parser.error("--ci-only/--ci-preview cannot be combined with suite setup options")
     if args.recover_tooling and (
         args.update_tooling
         or args.ci
@@ -1770,9 +1804,21 @@ def main() -> int:
     )
     if result.returncode or Path(result.stdout.strip()).resolve() != target:
         parser.error("--target must be the root of an existing Git working tree")
-    if not args.detect_only:
+    if not args.detect_only and not args.ci_preview:
         print("Destination repository: " + str(target), flush=True)
     try:
+        if args.ci_preview or args.ci_only:
+            if not args.ci_preview and not (target / ".quality/baseline.json").exists():
+                raise ValueError("--ci-only requires an existing managed tooling setup")
+            files = ci_configuration.plan(
+                target, providers, config_path=args.ci_config, preview=args.ci_preview
+            )
+            if args.ci_preview:
+                print(files[".quality/ci.json"], end="")
+            else:
+                ci_configuration.write(target, files)
+                print("Application CI configured; review adapter snippets and remote settings.")
+            return 0
         if args.recover_tooling:
             recover_tooling(
                 target, None if args.recover_tooling == "pending" else args.recover_tooling
@@ -1792,6 +1838,7 @@ def main() -> int:
             and not args.languages
             and not args.existing_tools
             and not args.configure_only
+            and not args.ci
             and (target / ".quality/config.json").exists()
             and sys.stdin.isatty()
         ):
@@ -1840,6 +1887,9 @@ def main() -> int:
                 arguments.append("--configure-only")
             if args.ci:
                 arguments.append("--ci")
+                arguments.extend(["--ci-providers", ",".join(sorted(providers))])
+                if args.ci_config:
+                    arguments.extend(["--ci-config", str(args.ci_config.expanduser().resolve())])
             result = ensure_configuration_parsers(target, arguments)
             if result is not None:
                 return result
@@ -1851,6 +1901,8 @@ def main() -> int:
             inventory=inventory,
             hook_directory=hook_directory,
             ci=args.ci,
+            ci_providers=providers,
+            ci_config=args.ci_config,
         )
         if not args.configure_only:
             subprocess.run(  # noqa: S603 -- fixed interpreter and generated installer; no shell

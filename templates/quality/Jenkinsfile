@@ -1,0 +1,23 @@
+pipeline {
+    agent { label 'linux' }
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+    stages {
+        stage('Application quality, security and tests') {
+            steps {
+                sh 'python3 .quality/ci.py all'
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                if (fileExists('.tools/ci/status.txt')) {
+                    currentBuild.description = readFile('.tools/ci/status.txt').trim()
+                }
+            }
+        }
+    }
+}

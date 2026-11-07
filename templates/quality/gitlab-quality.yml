@@ -1,0 +1,13 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /^(main|master)$/'
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+
+application-quality:
+  # Use an isolated Linux shell runner with Python/venv, Git and supported Node/npm.
+  stage: test
+  script:
+    - python3 .quality/ci.py all
+  after_script:
+    - python3 .quality/ci.py summary

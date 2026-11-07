@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from jsonc import parse_jsonc
-from maintenance import audit_node, doctor, freshness, scan_receipt
+from maintenance import audit_node, checked_path, doctor, freshness, scan_receipt
 
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED = {
@@ -25,6 +25,18 @@ EXCLUDED = {
     "__pycache__",
 }
 COMPOSE = {"compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"}
+
+
+def ci_result(name: str, status: str, detail: str = "") -> None:
+    report = os.environ.get("QUALITY_CI_REPORT")
+    if not report:
+        return
+    if report != ".tools/ci/checks.jsonl":
+        raise ValueError("CI results must use the managed report path")
+    path = checked_path(ROOT, report)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
+        stream.write(json.dumps({"name": name, "status": status, "detail": detail}) + "\n")
 
 
 def source_files() -> list[Path]:
@@ -43,6 +55,7 @@ def run(*command: str, directory: Path = ROOT, environment: dict[str, str] | Non
     executable = command[0]
     resolved = shutil.which(executable)
     if resolved is None:
+        ci_result(Path(executable).name, "FAILED", "Required tool is missing")
         raise FileNotFoundError(f"Required tool missing: {executable}; run .quality/install.py")
     print("$ " + " ".join(command), flush=True)
     env = os.environ.copy()
@@ -57,9 +70,17 @@ def run(*command: str, directory: Path = ROOT, environment: dict[str, str] | Non
         }
     )
     env.update(environment or {})
-    subprocess.run(  # noqa: S603 -- resolved local executable and argv; never shell interpolation
-        [resolved, *command[1:]], cwd=directory, env=env, check=True
+    name = " ".join(
+        command[2:4] if command[1:2] == ("-m",) else (Path(executable).name, *command[1:2])
     )
+    try:
+        subprocess.run(  # noqa: S603 -- resolved local executable and argv; never shell interpolation
+            [resolved, *command[1:]], cwd=directory, env=env, check=True
+        )
+    except (OSError, subprocess.CalledProcessError):
+        ci_result(name, "FAILED", "See job log")
+        raise
+    ci_result(name, "PASSED", str(directory.relative_to(ROOT)))
 
 
 def docker_checks(files: list[Path], docker: dict) -> None:
@@ -67,6 +88,7 @@ def docker_checks(files: list[Path], docker: dict) -> None:
     builds = docker["builds"]
     images = docker["images"]
     if not compose and not builds and not images:
+        ci_result("Docker runtime checks", "SKIPPED", "No Compose files or build/image targets")
         print(
             "Docker runtime checks: not applicable "
             "(no Compose files or configured build/image targets)."
@@ -74,6 +96,7 @@ def docker_checks(files: list[Path], docker: dict) -> None:
         return
     executable = shutil.which("docker")
     if executable is None:
+        ci_result("Docker runtime checks", "SKIPPED", "Docker CLI is unavailable")
         print(
             "SKIPPED Docker runtime checks: skipped due to missing local docker dependencies "
             "(Docker CLI)."
@@ -84,6 +107,7 @@ def docker_checks(files: list[Path], docker: dict) -> None:
         [executable, "compose", "version"], cwd=ROOT, capture_output=True, check=False
     )
     if probe.returncode and compose:
+        ci_result("Compose validation", "SKIPPED", "Compose v2 is unavailable")
         print(
             "SKIPPED Docker Compose validation: skipped due to missing local docker dependencies "
             "(Compose v2)."
@@ -101,12 +125,14 @@ def docker_checks(files: list[Path], docker: dict) -> None:
                 "-q",
             )
     if not builds and not images:
+        ci_result("Docker build/image scans", "SKIPPED", "No explicit build/image targets")
         print("Docker builds/image scans: not configured; require explicit image/build targets.")
         return
     daemon = subprocess.run(  # noqa: S603 -- resolved Docker executable, fixed probe arguments
         [executable, "info"], cwd=ROOT, capture_output=True, check=False
     )
     if daemon.returncode:
+        ci_result("Docker build/image scans", "SKIPPED", "Docker daemon is unavailable")
         print(
             "SKIPPED Docker builds/image scans: skipped due to missing local docker dependencies "
             "(accessible Docker daemon; check service status and permissions)."
@@ -137,10 +163,15 @@ def main() -> int:
         choices=[
             "check",
             "format",
+            "format-check",
             "lint",
             "types",
             "schemas",
             "security",
+            "secrets",
+            "sast",
+            "dependencies",
+            "filesystem",
             "docker",
             "commit",
             "push",
@@ -177,15 +208,19 @@ def main() -> int:
     }
     action = args.action
     check = action in {"check", "push"}
-    format_check = check or (
-        action == "commit"
-        and (
-            config.get("hook_manager") != "pre-commit"
-            or os.environ.get("QUALITY_UPDATE_CHECK") == "1"
+    format_check = (
+        action == "format-check"
+        or check
+        or (
+            action == "commit"
+            and (
+                config.get("hook_manager") != "pre-commit"
+                or os.environ.get("QUALITY_UPDATE_CHECK") == "1"
+            )
         )
     )
     lint = action in {"lint", "commit"} or check
-    formatting = action in {"format", "commit"} or check
+    formatting = action in {"format", "format-check", "commit"} or check
     if formatting:
         if node:
             for directory in node_projects:
@@ -273,6 +308,7 @@ def main() -> int:
                         directory=directory,
                     )
             else:
+                ci_result("TypeScript", "SKIPPED", "No application source files")
                 print("TypeScript: not applicable (no application source files yet).")
         if python:
             for project in config.get("python_projects", ["."]):
@@ -311,7 +347,7 @@ def main() -> int:
                     item["schema"],
                     *inputs,
                 )
-    if action in {"commit", "security", "push"}:
+    if action in {"commit", "security", "push", "secrets"}:
         configs = scanner_configs.get("gitleaks", [])
         root_configs = [path for path in configs if path.parent == ROOT]
         run(
@@ -322,13 +358,21 @@ def main() -> int:
             *(["--config", str(root_configs[0])] if root_configs else []),
             ".",
         )
-    if action in {"security", "push"}:
+    if action in {"security", "push", "dependencies"}:
         if args.offline and not Path(config["semgrep_config"]).is_file():
             raise ValueError(
                 "Offline Semgrep requires a reviewed local rule file, not registry rules"
             )
         if node:
-            audit_node(ROOT, config, offline=args.offline)
+            try:
+                audit_node(ROOT, config, offline=args.offline)
+            except (OSError, ValueError, subprocess.CalledProcessError):
+                ci_result("Application npm dependency audit", "FAILED", "See job log")
+                raise
+            ci_result("Application npm dependency audit", "PASSED")
+        else:
+            ci_result("Application npm dependency audit", "SKIPPED", "No Node application profile")
+    if action in {"security", "push", "secrets"}:
         for path in scanner_configs.get("gitleaks", []):
             if path.parent != ROOT:
                 run(
@@ -340,6 +384,7 @@ def main() -> int:
                     ".",
                     directory=path.parent,
                 )
+    if action in {"security", "push", "sast"}:
         run(
             str(ROOT / ".tools/venv/bin/semgrep"),
             "scan",
@@ -365,6 +410,7 @@ def main() -> int:
                     ".",
                     directory=path.parent,
                 )
+    if action in {"security", "push", "filesystem"}:
         trivy_configs = scanner_configs.get("trivy", [])
         for scope in sorted({ROOT, *(path.parent for path in trivy_configs)}):
             options = [
@@ -410,6 +456,7 @@ def main() -> int:
                 ".",
                 directory=scope,
             )
+    if action in {"security", "push"}:
         scan_receipt(ROOT, config, args.offline)
     if action == "docker" or check:
         docker_checks(files, config["docker"])

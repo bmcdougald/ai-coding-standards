@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14.4'
@@ -20,6 +21,10 @@ jobs:
           node-version: '22.22.1'
       - name: Restore reviewed tools
         run: python3 .quality/install.py --restore-tools
+      - name: Restore repository Python dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r scripts/requirements-bootstrap.txt
       - name: Check application artifacts
         run: .tools/venv/bin/python .quality/run.py push
       - name: Run retained project hooks and tests

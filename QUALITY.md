@@ -272,14 +272,9 @@ dependencies**, then run automatically after installation. Invalid Compose,
 failed builds and scan findings fail normally. A dependency skip is not a passed
 scan; inspect output before claiming validation.
 
-## GitHub Actions
+## Optional application CI
 
-Pass `--ci` during setup to add a non-overwriting quality workflow with read-only
-permissions and commit-pinned actions. It restores local tools and runs application
-checks/security and retained hook stages.
-Add project-specific application environment/dependency restoration and build steps
-before those checks; scanner restoration does not install Python application dependencies.
-Configure the quality job as a required branch-protection check separately.
-Remote-dependent hooks need their own CI
-adaptation. ai-coding-standards audits its tools in a separate scheduled/manual
-workflow; accepted findings remain visibly failing there.
+CI is not required for local setup and can be added later. Follow the separate
+[Application CI setup and usage guide](templates/quality/CI.md) for provider
+configuration, application tests and remote merge protection. The guide stays in
+the standards checkout; CI setup adds no documentation to the target repository.

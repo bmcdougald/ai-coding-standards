@@ -12,11 +12,11 @@ profiles. Initial support: Linux/macOS x86_64 and arm64.
 
 ```sh
 git clone https://github.com/bmcdougald/ai-coding-standards.git ~/git/ai-coding-standards
-mkdir -p ~/git/temp/my-project
-git -C ~/git/temp/my-project init
+mkdir -p ~/git/your-project-name
+git -C ~/git/your-project-name init
 cd ~/git/ai-coding-standards
 bash scripts/bootstrap.sh
-# At the repository-path prompt, enter: ~/git/temp/my-project
+# At the repository-path prompt, enter: ~/git/your-project-name
 ```
 
 Run the script from the cloned tools repository or any working directory.
@@ -114,8 +114,8 @@ python3 .quality/install.py                # restore tools/hooks in a fresh clon
 Docker-independent checks always work. Docker runtime checks stay configured and
 explicitly skip unavailable dependencies, then activate on future runs when
 Docker is available. Builds/image scans require explicit targets; no build context
-is guessed. Pass `--ci` during setup to add GitHub Actions application gates without
-overwriting an existing workflow.
+is guessed. CI is optional and can be added later; see the separate
+[application CI setup and usage guide](templates/quality/CI.md).
 
 See the [generated setup and usage guide](templates/quality/USAGE.md) for tool
 responsibilities, IDE integration, configuration, network requirements and Docker
@@ -223,24 +223,20 @@ have its databases; updates are disabled. npm uses a cached advisory result tied
 to the exact current lock, no older than 24 hours; absent/expired results fail.
 An offline success is based on cached advisories, not a current vulnerability check.
 
-### CI enforcement
+### Optional application CI
 
-`--ci` installs `.github/workflows/quality.yml` only when absent or identical. It
-uses read-only permissions, commit-pinned official actions, pinned Python/Node
-runtimes, restores reviewed locks, and runs application gates plus retained hook
-checks/tests. Review remote-dependent/custom hook requirements separately.
-Add your project's application dependency/environment restoration and build steps
-before the quality checks; restoring scanner tools does not install Python application dependencies.
-Make the quality job required through branch protection; writing a workflow alone
-does not configure repository enforcement.
-
-The standards repository has a separate scheduled/manual tooling-audit workflow.
-Python and npm audits run independently; accepted findings remain visible as failed
-jobs, not suppressed or treated as application failures. Workflow execution on
-GitHub must be verified after publication; local checks validate structure and
-equivalent commands but cannot certify the hosted run.
+The basic setup needs no CI configuration. When ready, follow the separate
+[CI setup and usage guide](templates/quality/CI.md) for GitHub, GitLab or Jenkins,
+including application tests, runner prerequisites and remote merge protection.
+The guide stays in this checkout; CI setup adds no documentation to the target repository.
 
 ## Bootstrapper tests
+
+The standards repository's own GitHub quality workflow restores its Python parser
+dependencies into an application `.venv`, separately from scanner tools. Its full
+checkout history supplies the published-runtime fixtures used by migration tests.
+Application CI templates require project-specific environment restoration instead;
+they do not install the standards repository's parser dependencies.
 
 ```sh
 python3 .quality/install.py

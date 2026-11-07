@@ -261,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                 ".vscode/settings.json",
                 ".vscode/extensions.json",
                 ".vscode/tasks.json",
+                *([".quality/ci.json"] if (ROOT / ".quality/ci.json").exists() else []),
             )
     for name, spec in config["binaries"].items():
         install_binary(name, spec, system)
