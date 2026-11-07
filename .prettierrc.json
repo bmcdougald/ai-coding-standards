@@ -3,5 +3,13 @@
   "semi": true,
   "trailingComma": "all",
   "printWidth": 100,
-  "tabWidth": 2
+  "tabWidth": 2,
+  "overrides": [
+    {
+      "files": "references/*.htm",
+      "options": {
+        "trailingComma": "es5"
+      }
+    }
+  ]
 }

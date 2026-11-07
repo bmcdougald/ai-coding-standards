@@ -317,7 +317,11 @@ def choose_tooling_policy(
 
 
 def ensure_configuration_parsers(target: Path, arguments: list[str]) -> int | None:
-    if importlib.util.find_spec("tomlkit") and importlib.util.find_spec("ruamel"):
+    if (
+        importlib.util.find_spec("tomlkit")
+        and importlib.util.find_spec("ruamel")
+        and importlib.util.find_spec("ruamel.yaml")
+    ):
         return None
     environment = target / ".tools/bootstrap"
     if any(path.is_symlink() for path in (environment, *environment.parents)):
@@ -732,6 +736,7 @@ def plan_tooling_update(
         baseline["runtime"][new_file] = hashlib.sha256(edits[new_file].encode()).hexdigest()
         edits.update(plan_isolation_migration(target, config, edits))
         baseline["runtime_api"] = 2
+    edits.update(plan_prettier_update(target, config, edits))
     config["runtime_api"] = latest["runtime_api"]
     for owned in baseline["node"].values():
         for field, values in owned.items():
@@ -759,6 +764,82 @@ def plan_tooling_update(
             )
         )
     }, config
+
+
+def plan_prettier_update(
+    target: Path, config: dict[str, Any], edits: dict[str, str]
+) -> dict[str, str]:
+    changes: dict[str, str] = {}
+    names = {
+        name
+        for name in config.get("managed_tooling", [])
+        if Path(name).name in integration.CONFIGS["prettier"]
+    }
+    for project in config.get("node_projects", []):
+        name = (Path(project) / "package.json").as_posix()
+        path = safe_tool_path(target, name)
+        if path.exists() and "prettier" in parse_jsonc(path.read_text()):
+            names.add(name)
+    if not names:
+        return changes
+    template = json.loads((SOURCE / "prettierrc.json").read_text())
+    desired = next(
+        override for override in template["overrides"] if override["files"] == "references/*.htm"
+    )
+    for name in sorted(names):
+        path = safe_tool_path(target, name)
+        if not path.is_file():
+            raise ValueError("Recorded Prettier configuration is missing: " + name)
+        if Path(name).name not in {".prettierrc", ".prettierrc.json", "package.json"}:
+            print(
+                "Tooling update: manually add the Prettier "
+                "references/*.htm trailingComma=es5 override in " + name
+            )
+            continue
+        text = edits.get(name, path.read_text())
+        document = parse_jsonc(text)
+        prettier = document.get("prettier") if path.name == "package.json" else document
+        if not isinstance(prettier, dict):
+            raise ValueError("Prettier configuration must be an object: " + name)
+        overrides = prettier.get("overrides", [])
+        if not isinstance(overrides, list) or any(
+            not isinstance(override, dict) or not isinstance(override.get("options"), dict)
+            for override in overrides
+        ):
+            raise ValueError("Invalid Prettier overrides: " + name)
+        matching = [
+            override
+            for override in overrides
+            if override.get("files") == desired["files"]
+            or isinstance(override.get("files"), list)
+            and desired["files"] in override["files"]
+        ]
+        if matching:
+            if any(
+                "trailingComma" in override["options"] or "excludeFiles" in override
+                for override in matching
+            ):
+                if any(
+                    override["options"].get("trailingComma") != "es5" or "excludeFiles" in override
+                    for override in matching
+                ):
+                    print(
+                        "Preserving explicit Prettier reference override in "
+                        + name
+                        + "; review trailingComma=es5 manually."
+                    )
+                continue
+            for override in matching:
+                override["options"]["trailingComma"] = "es5"
+        else:
+            overrides.append(desired)
+        update = {"overrides": overrides}
+        changes[name] = merge_jsonc(
+            text,
+            {"prettier": update} if path.name == "package.json" else update,
+            replace_values=True,
+        )
+    return changes
 
 
 def plan_isolation_migration(
@@ -1874,7 +1955,7 @@ def main() -> int:
         ):
             raise ValueError("Active hooks are outside this repository; reconcile them manually")
         languages, existing, _ = select_languages(target, git, args.languages)
-        if any(entry["kind"] in {"python", "pre-commit"} for entry in inventory):
+        if any(entry["kind"] in {"python", "ruff", "pyright", "pre-commit"} for entry in inventory):
             arguments = [
                 "--target",
                 str(target),

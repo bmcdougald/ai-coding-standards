@@ -66,6 +66,106 @@ class ApplicationCITests(unittest.TestCase):
             )
             self.assertIn("-r", config["setup"][1]["argv"])
 
+    def test_python_playwright_requirements_propose_browser_setup_without_duplicate_tests(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tests/e2e").mkdir(parents=True)
+            (root / "pytest.ini").write_text("[pytest]\n")
+            (root / "requirements-dev.txt").write_text(
+                "# pytest-playwright is application test infrastructure\npytest-playwright==0.7.1\n"
+            )
+            (root / "tests/e2e/test_screens.py").write_text(
+                "def test_screen(page):\n    assert page is not None\n"
+            )
+            config = configuration.discover(root)
+            self.assertEqual(
+                config["tests"],
+                [{"name": "pytest", "cwd": ".", "argv": ["{python}", "-m", "pytest"]}],
+            )
+            self.assertEqual(
+                config["setup"][-1]["argv"],
+                [
+                    "{python}",
+                    "-m",
+                    "playwright",
+                    "install",
+                    "--with-deps",
+                ],
+            )
+            self.assertIn("Python Playwright", config["setup"][-1]["name"])
+            git = shutil.which("git")
+            if git is None:
+                self.fail("Git is required")
+            subprocess.run([git, "init", "-q", str(root)], check=True)  # noqa: S603
+            result = subprocess.run(  # noqa: S603 -- fixed preview CLI and disposable fixture
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/bootstrap.py"),
+                    "--target",
+                    str(root),
+                    "--ci-preview",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual(json.loads(result.stdout), config)
+            self.assertFalse((root / ".quality").exists())
+
+    def test_python_playwright_package_extras_and_fixture_imports(self):
+        for evidence in ("extra", "fixture"):
+            with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                app = root / "backend"
+                (app / "tests/e2e").mkdir(parents=True)
+                (app / "pytest.ini").write_text("[pytest]\n")
+                (root / "pyproject.toml").write_text("[tool.ruff]\n")
+                (app / "pyproject.toml").write_text(
+                    '[project]\nname = "app"\nversion = "1.0.0"\n'
+                    '[project.optional-dependencies]\ntest = ["pytest", "playwright>=1.50"]\n'
+                    if evidence == "extra"
+                    else "[tool.pytest.ini_options]\n"
+                )
+                (app / "tests/e2e/test_screens.py").write_text("def test_screen(page): pass\n")
+                if evidence == "fixture":
+                    (app / "tests/e2e/conftest.py").write_text(
+                        "from playwright.sync_api import sync_playwright\n"
+                    )
+                config = configuration.discover(root)
+                self.assertEqual(config["setup"][-1]["cwd"], "backend")
+                self.assertEqual(
+                    config["setup"][-1]["argv"][:3],
+                    [
+                        "{python}",
+                        "-m",
+                        "playwright",
+                    ],
+                )
+                self.assertEqual(len(config["tests"]), 1)
+
+    def test_python_playwright_comments_and_node_dependencies_do_not_trigger_python_setup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "pytest.ini").write_text("[pytest]\n")
+            (root / "requirements-dev.txt").write_text("# pytest-playwright==0.7.1\npytest\n")
+            (root / "test_app.py").write_text(
+                "# from playwright.sync_api import Page\ndef test_app(): pass\n"
+            )
+            (root / "package.json").write_text(
+                '{"devDependencies": {"@playwright/test": "1.64.1"}}'
+            )
+            config = configuration.discover(root)
+            self.assertFalse(any("playwright" in entry["argv"] for entry in config["setup"]))
+
+    def test_invalid_python_fixture_is_reported_explicitly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "pytest.ini").write_text("[pytest]\n")
+            (root / "test_app.py").write_text("def test_app(): pass\n")
+            (root / "conftest.py").write_text("def invalid syntax\n")
+            with self.assertRaisesRegex(ValueError, "Invalid Python test/fixture"):
+                configuration.discover(root)
+
     def test_unittest_and_ambiguous_frameworks(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

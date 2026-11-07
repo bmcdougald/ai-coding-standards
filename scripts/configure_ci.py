@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -133,17 +135,21 @@ def discover(target: Path) -> dict[str, Any]:
     if not python_roots and any(path.suffix == ".py" for path in paths):
         python_roots.add(target)
     for directory in sorted(python_roots):
-        tests = [
+        scoped_paths = [
             path
             for path in paths
             if path.is_relative_to(directory)
-            and (path.name.startswith("test_") or path.name.endswith("_test.py"))
-            and path.suffix == ".py"
             and not any(
                 path.is_relative_to(child)
                 for child in python_roots
                 if child != directory and child.is_relative_to(directory)
             )
+        ]
+        tests = [
+            path
+            for path in scoped_paths
+            if (path.name.startswith("test_") or path.name.endswith("_test.py"))
+            and path.suffix == ".py"
         ]
         if not tests:
             continue
@@ -175,7 +181,13 @@ def discover(target: Path) -> dict[str, Any]:
             for name in ("requirements.txt", "requirements-dev.txt", "requirements-test.txt")
             if (directory / name) in paths
         ]
+        python_dependencies: list[str] = []
         if requirements:
+            python_dependencies = [
+                line
+                for name in requirements
+                for line in (directory / name).read_text().splitlines()
+            ]
             command(
                 "setup",
                 "Install application Python requirements",
@@ -191,6 +203,10 @@ def discover(target: Path) -> dict[str, Any]:
         elif project.get("project") or (directory / "setup.py") in paths:
             extras = project.get("project", {}).get("optional-dependencies", {})
             extra = next((name for name in ("test", "tests", "dev") if name in extras), None)
+            python_dependencies = [
+                *project.get("project", {}).get("dependencies", []),
+                *extras.get(extra, []),
+            ]
             command(
                 "setup",
                 "Install application Python package",
@@ -198,6 +214,35 @@ def discover(target: Path) -> dict[str, Any]:
                 ["{python}", "-m", "pip", "install", f".[{extra}]" if extra else "."],
             )
         if pytest:
+            playwright = any(
+                re.match(
+                    r"^\s*(?:pytest[-_]playwright|playwright)(?=\s|[<>=!~;\[]|$)",
+                    value,
+                    re.IGNORECASE,
+                )
+                for value in python_dependencies
+            )
+            for path in [*tests, *(path for path in scoped_paths if path.name == "conftest.py")]:
+                try:
+                    tree = ast.parse(path.read_text(), filename=str(path))
+                except SyntaxError as error:
+                    raise ValueError("Invalid Python test/fixture: " + str(path)) from error
+                if any(
+                    isinstance(node, ast.Import)
+                    and any(alias.name.split(".")[0] == "playwright" for alias in node.names)
+                    or isinstance(node, ast.ImportFrom)
+                    and node.module is not None
+                    and node.module.split(".")[0] == "playwright"
+                    for node in ast.walk(tree)
+                ):
+                    playwright = True
+            if playwright:
+                command(
+                    "setup",
+                    "Install Python Playwright browsers/system dependencies",
+                    directory,
+                    ["{python}", "-m", "playwright", "install", "--with-deps"],
+                )
             command("tests", "pytest", directory, ["{python}", "-m", "pytest"])
         else:
             start = "tests" if (directory / "tests").is_dir() else "."

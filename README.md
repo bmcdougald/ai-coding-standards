@@ -101,6 +101,11 @@ Review generated files and commit them, including locks; never commit environmen
 or downloaded binaries.
 Run `format` and stage its changes first: Husky/custom shell hooks verify formatting
 without silently changing files after they have been staged.
+The default Prettier configuration uses `trailingComma: "es5"` for embedded
+JavaScript in `references/*.htm`, avoiding trailing commas in function parameters
+and calls. All other files retain `trailingComma: "all"`; this is not a general
+ES5 compatibility transformation. Existing application formatter settings remain
+subject to the selected integration policy.
 
 ## Use
 
@@ -145,6 +150,11 @@ New setups record dependency ownership and runtime fingerprints in
 npm dependency entries/overrides, binary release specifications and compatible
 suite runtime scripts. They preserve application dependencies, custom tests,
 analyzer rules, VS Code configuration, scanner policy and existing hooks.
+One additive formatter update adds the `references/*.htm` Prettier
+`trailingComma: "es5"` override to recorded JSON configurations (including
+`package.json` settings), preserving other options and overrides. Explicit
+reference-page overrides are retained with a review notice if they differ.
+Other Prettier configuration formats require manual editing and are reported.
 Dependencies retained during amendment are not owned and remain unchanged.
 npm lifecycle scripts are not run during tooling updates/restoration, avoiding
 automatic hook reinstallation. Shared transitive dependencies can change during
@@ -237,6 +247,11 @@ dependencies into an application `.venv`, separately from scanner tools. Its ful
 checkout history supplies the published-runtime fixtures used by migration tests.
 Application CI templates require project-specific environment restoration instead;
 they do not install the standards repository's parser dependencies.
+
+When onboarding existing Python project, standalone Ruff/Pyright, or pre-commit
+configurations, bootstrap automatically installs missing comment-preserving
+parsers in the target's `.tools/bootstrap` and resumes setup there. No global
+parser installation or changes to the application's `.venv` are required.
 
 ```sh
 python3 .quality/install.py

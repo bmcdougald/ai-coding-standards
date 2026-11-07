@@ -54,6 +54,20 @@ tooling/generated directories, supports nested projects, and does not install
 a new test framework. Ambiguous Python tests are reported for manual configuration.
 Existing application test scripts are reused, not rewritten.
 
+Python Playwright is also detected from `playwright`/`pytest-playwright` in the
+selected requirements or installed package dependencies/extras, or Playwright
+imports in tests and `conftest.py`. Discovery proposes
+`{python} -m playwright install --with-deps` after application dependency setup.
+The existing pytest command includes pytest-based browser tests; no duplicate
+e2e invocation is added. Review pytest collection settings and add separate
+commands if your configuration excludes e2e tests from the default run.
+Select required browsers in the reviewed argv (for example, append `chromium`);
+otherwise Playwright installs its default browsers. Imports alone do not install
+the Python package: ensure your application dependency setup includes it.
+Existing `.quality/ci.json` commands remain preserved, including during preview.
+To enable browser setup in an already configured project, edit a reviewed copy
+of that JSON and pass it through `--ci-config`; discovery does not rewrite saved commands.
+
 Review aggregate/workspace scripts to avoid running the same suite twice, and
 replace watch-mode commands with CI variants. Discovery cannot infer databases,
 service containers, credentials, native builds, private registries, Python
@@ -62,6 +76,10 @@ Tests already run by custom hooks must be represented here or in the application
 existing pipeline; untracked Git hooks are not recreated or assumed present on CI.
 
 The application-owned `.quality/ci.json` contains named argv commands:
+
+This JSON lists only application setup/tests. Formatting, lint, types, schemas,
+Gitleaks, Semgrep, dependency audits and Trivy are built into the CI runner and
+do not need to be repeated in this file.
 
 ```json
 {

@@ -35,6 +35,54 @@ installer = load("quality_installer", ROOT / "templates/quality/install.py")
 
 
 class ToolingUpdateTests(unittest.TestCase):
+    def test_prettier_reference_html_override_is_generated_and_scoped(self):
+        node = shutil.which("node")
+        if node is None:
+            self.fail("Node is required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.project(root, {"javascript"})
+            template = json.loads((ROOT / "prettierrc.json").read_text())
+            self.assertEqual(json.loads((ROOT / ".prettierrc.json").read_text()), template)
+            self.assertEqual(json.loads((root / ".prettierrc.json").read_text()), template)
+            result = subprocess.run(  # noqa: S603 -- fixed Node program and disposable project
+                [
+                    node,
+                    "--input-type=module",
+                    "-e",
+                    """
+import * as prettier from 'prettier';
+import path from 'node:path';
+const results = [];
+for (const root of process.argv.slice(1)) {
+  for (const name of ['references/example.htm', 'app.htm', 'references/example.js']) {
+    const filepath = path.join(root, name);
+    const options = await prettier.resolveConfig(filepath);
+    const source = 'function example(firstParameter, secondParameter) { return firstParameter; }';
+    const html = name.endsWith('.htm');
+    const formatted = await prettier.format(html ? `<script>${source}</script>` : source,
+      {...options, filepath, printWidth: 20});
+    results.push({trailingComma: options.trailingComma, formatted});
+  }
+}
+console.log(JSON.stringify(results));
+""",
+                    str(ROOT),
+                    str(root),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            results = json.loads(result.stdout)
+            self.assertEqual(
+                [entry["trailingComma"] for entry in results],
+                ["es5", "all", "all", "es5", "all", "all"],
+            )
+            for index, entry in enumerate(results):
+                self.assertEqual("secondParameter,\n" in entry["formatted"], index % 3 != 0)
+
     def project(self, root: Path, languages: set[str] | None = None) -> None:
         git = shutil.which("git")
         if git is None:
@@ -47,12 +95,99 @@ class ToolingUpdateTests(unittest.TestCase):
 
     def candidate(self, source: Path) -> None:
         shutil.copytree(ROOT / "templates", source / "templates")
+        shutil.copy2(ROOT / "prettierrc.json", source / "prettierrc.json")
         path = source / "templates/quality/versions.json"
         versions = json.loads(path.read_text())
         versions["python"]["ruff"] = "0.17.5"
         versions["node"]["eslint"] = "10.14.1"
         versions["node_overrides"]["eslint"]["minimatch"] = "11.0.6"
         path.write_text(json.dumps(versions))
+
+    def test_update_adds_prettier_override_and_preserves_settings_and_comments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.project(root, {"javascript"})
+            path = root / ".prettierrc.json"
+            path.write_text(
+                '{\n// Application preference\n"semi": false, "trailingComma": "all",\n'
+                '"overrides": [{"files": "*.md", "options": {"printWidth": 80}}]\n}\n'
+            )
+            original = path.read_text()
+            edits, _ = bootstrap.plan_tooling_update(root)
+            self.assertEqual(path.read_text(), original)
+            updated = bootstrap.parse_jsonc(edits[".prettierrc.json"])
+            self.assertFalse(updated["semi"])
+            self.assertEqual(updated["trailingComma"], "all")
+            self.assertIn("// Application preference", edits[".prettierrc.json"])
+            self.assertEqual(
+                updated["overrides"],
+                [
+                    {"files": "*.md", "options": {"printWidth": 80}},
+                    {"files": "references/*.htm", "options": {"trailingComma": "es5"}},
+                ],
+            )
+            path.write_text(edits[".prettierrc.json"])
+            self.assertNotIn(".prettierrc.json", bootstrap.plan_tooling_update(root)[0])
+            path.write_text(original)
+            with (
+                patch.object(bootstrap.subprocess, "run") as run,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                bootstrap.update_tooling(root, yes=True)
+            self.assertEqual(bootstrap.parse_jsonc(path.read_text()), updated)
+            self.assertTrue(run.called)
+            backups = list((root / ".tools/backups").glob("update-*/.prettierrc.json"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(), original)
+            self.assertFalse((root / ".tools/update-pending.json").exists())
+
+    def test_update_preserves_explicit_prettier_reference_override(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.project(root, {"javascript"})
+            path = root / ".prettierrc.json"
+            config = json.loads(path.read_text())
+            config["overrides"][0]["options"]["trailingComma"] = "none"
+            path.write_text(json.dumps(config))
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                edits, _ = bootstrap.plan_tooling_update(root)
+            self.assertNotIn(".prettierrc.json", edits)
+            self.assertIn("Preserving explicit Prettier", output.getvalue())
+
+    def test_update_prettier_missing_option_and_invalid_configuration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.project(root, {"javascript"})
+            path = root / ".prettierrc.json"
+            path.write_text(
+                '{"overrides":[{"files":"references/*.htm","options":{"printWidth":80}}]}'
+            )
+            edits, _ = bootstrap.plan_tooling_update(root)
+            options = json.loads(edits[".prettierrc.json"])["overrides"][0]["options"]
+            self.assertEqual(options, {"printWidth": 80, "trailingComma": "es5"})
+            path.write_text('{"overrides":{}}')
+            with self.assertRaisesRegex(ValueError, "Invalid Prettier overrides"):
+                bootstrap.plan_tooling_update(root)
+
+    def test_update_prettier_package_settings_and_non_json_manual_notice(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.project(root, {"javascript"})
+            path = root / "package.json"
+            package = json.loads(path.read_text())
+            package["prettier"] = {"semi": False}
+            path.write_text(json.dumps(package))
+            edits, _ = bootstrap.plan_tooling_update(root)
+            settings = json.loads(edits["package.json"])["prettier"]
+            self.assertFalse(settings["semi"])
+            self.assertEqual(settings["overrides"][0]["options"]["trailingComma"], "es5")
+            config = bootstrap.parse_jsonc((root / ".quality/config.json").read_text())
+            config["managed_tooling"] = ["prettier.config.mjs"]
+            (root / "prettier.config.mjs").write_text("export default { semi: false };\n")
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                edits = bootstrap.plan_prettier_update(root, config, {})
+            self.assertNotIn("prettier.config.mjs", edits)
+            self.assertIn("manually add", output.getvalue())
 
     def test_updates_owned_versions_and_preserves_application_configuration(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -668,6 +803,75 @@ class DetectionTests(unittest.TestCase):
 class ToolingPolicyTests(unittest.TestCase):
     repository = DetectionTests.repository
     write = DetectionTests.write
+
+    def test_parser_preflight_checks_ruamel_yaml_not_only_namespace(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                patch.object(
+                    bootstrap.importlib.util,
+                    "find_spec",
+                    side_effect=lambda name: None if name == "ruamel.yaml" else object(),
+                ) as find_spec,
+                patch.object(
+                    bootstrap.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 0),
+                ) as run,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    bootstrap.ensure_configuration_parsers(root, ["--target", str(root)]), 0
+                )
+                find_spec.assert_any_call("ruamel.yaml")
+                self.assertIn("pip", run.call_args_list[1].args[0])
+                self.assertEqual(
+                    run.call_args.args[0][0], str(root / ".tools/bootstrap/bin/python")
+                )
+
+    def test_standalone_python_configs_bootstrap_parsers_before_reconciliation(self):
+        for filename, content in (
+            ("ruff.toml", "line-length = 88\n"),
+            (".ruff.toml", "line-length = 88\n"),
+            ("pyrightconfig.json", '{"typeCheckingMode": "standard"}\n'),
+        ):
+            for policy in ("amend", "replace"):
+                with (
+                    self.subTest(config=filename, policy=policy),
+                    tempfile.TemporaryDirectory() as temp,
+                ):
+                    root = Path(temp)
+                    self.repository(root)
+                    self.write(root, "app/main.py", "value = 1\n")
+                    self.write(root, "app/static/main.js", "const value = 1;\n")
+                    self.write(root, filename, content)
+                    with (
+                        patch.object(
+                            sys,
+                            "argv",
+                            [
+                                "bootstrap.py",
+                                "--target",
+                                str(root),
+                                "--existing-tools",
+                                policy,
+                                "--configure-only",
+                            ],
+                        ),
+                        patch.object(
+                            bootstrap, "ensure_configuration_parsers", return_value=0
+                        ) as parsers,
+                        patch.object(bootstrap, "scaffold") as scaffold,
+                        contextlib.redirect_stdout(io.StringIO()),
+                    ):
+                        self.assertEqual(bootstrap.main(), 0)
+                        parsers.assert_called_once()
+                        arguments = parsers.call_args.args[1]
+                        self.assertEqual(
+                            arguments[arguments.index("--languages") + 1], "javascript,python"
+                        )
+                        self.assertIn("--configure-only", arguments)
+                        scaffold.assert_not_called()
 
     def reconcile(self, root: Path, languages: set[str], policy: str) -> None:
         git = shutil.which("git")
