@@ -4,71 +4,57 @@
     {
       "label": "Quality: check",
       "type": "process",
-      "command": "${workspaceFolder}/.venv/bin/python",
+      "command": "${workspaceFolder}/.tools/venv/bin/python",
       "args": ["${workspaceFolder}/.quality/run.py", "check"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
       "label": "Quality: format",
       "type": "process",
-      "command": "${workspaceFolder}/.venv/bin/python",
+      "command": "${workspaceFolder}/.tools/venv/bin/python",
       "args": ["${workspaceFolder}/.quality/run.py", "format"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
       "label": "Quality: lint",
       "type": "process",
-      "command": "${workspaceFolder}/.venv/bin/python",
+      "command": "${workspaceFolder}/.tools/venv/bin/python",
       "args": ["${workspaceFolder}/.quality/run.py", "lint"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
       "label": "Quality: types",
       "type": "process",
-      "command": "${workspaceFolder}/.venv/bin/python",
+      "command": "${workspaceFolder}/.tools/venv/bin/python",
       "args": ["${workspaceFolder}/.quality/run.py", "types"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
       "label": "Quality: schemas",
       "type": "process",
-      "command": "${workspaceFolder}/.venv/bin/python",
+      "command": "${workspaceFolder}/.tools/venv/bin/python",
       "args": ["${workspaceFolder}/.quality/run.py", "schemas"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
       "label": "Quality: security",
       "type": "process",
-      "command": "${workspaceFolder}/.venv/bin/python",
+      "command": "${workspaceFolder}/.tools/venv/bin/python",
       "args": ["${workspaceFolder}/.quality/run.py", "security"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
       "label": "Quality: docker",
       "type": "process",
-      "command": "${workspaceFolder}/.venv/bin/python",
+      "command": "${workspaceFolder}/.tools/venv/bin/python",
       "args": ["${workspaceFolder}/.quality/run.py", "docker"],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
+      "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     }
   ]

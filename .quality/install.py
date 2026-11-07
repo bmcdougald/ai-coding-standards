@@ -64,7 +64,14 @@ def npm_action(directory: Path, workspaces: list[Path] | None = None) -> str:
     package = json.loads((directory / "package.json").read_text())
     packages = json.loads(lock_path.read_text()).get("packages", {})
     locked = packages.get("")
-    fields = ("dependencies", "devDependencies", "optionalDependencies", "workspaces")
+    fields = (
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+        "peerDependenciesMeta",
+        "workspaces",
+    )
     mismatch = not isinstance(locked, dict) or any(
         package.get(key) != locked.get(key) for key in fields
     )
@@ -176,9 +183,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     if sys.version_info < (3, 11):  # noqa: UP036 -- explicit installer prerequisite diagnostic
         raise ValueError("Python 3.11+ is required")
-    python = ROOT / ".venv/bin/python"
+    python = ROOT / ".tools/venv/bin/python"
     if not python.exists():
-        run(sys.executable, "-m", "venv", str(ROOT / ".venv"))
+        run(sys.executable, "-m", "venv", str(ROOT / ".tools/venv"))
     # Freeze the resolved graph once; fresh clones restore it instead of resolving again.
     lock = ROOT / ".quality/locked/requirements.txt"
     if lock.exists() and not args.update_tools:
@@ -274,9 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         if unset.returncode not in {0, 5}:
             raise subprocess.CalledProcessError(unset.returncode, unset.args)
     if manager == "pre-commit":
-        run(str(ROOT / ".venv/bin/pre-commit"), "validate-config")
+        run(str(ROOT / ".tools/venv/bin/pre-commit"), "validate-config")
         run(
-            str(ROOT / ".venv/bin/pre-commit"),
+            str(ROOT / ".tools/venv/bin/pre-commit"),
             "install",
             "--hook-type",
             "pre-commit",

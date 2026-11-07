@@ -541,7 +541,8 @@ def tooling_baseline(
         "binaries": config["binaries"],
         "runtime": {
             ".quality/" + name: hashlib.sha256(files[".quality/" + name].encode()).hexdigest()
-            for name in ("install.py", "run.py", "jsonc.py")
+            for name in ("install.py", "run.py", "jsonc.py", "maintenance.py")
+            if ".quality/" + name in files
         },
     }
 
@@ -562,7 +563,7 @@ def compatible_version(name: str, old: str, new: str) -> None:
 
 
 def plan_tooling_update(
-    target: Path, *, adopt: bool = False
+    target: Path, *, adopt: bool = False, migrate: bool = False
 ) -> tuple[dict[str, str], dict[str, Any]]:
     pending = safe_tool_path(target, ".tools/update-pending.json")
     if pending.exists():
@@ -573,6 +574,21 @@ def plan_tooling_update(
         )
     config = parse_jsonc(safe_tool_path(target, ".quality/config.json").read_text())
     latest = json.loads((SOURCE / "templates/quality/versions.json").read_text())
+
+    def check_version(name: str, old: str, new: str) -> None:
+        if any(
+            not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", version)
+            for version in (old, new)
+        ):
+            raise ValueError("Migration versions must be exact numeric pins: " + name)
+        try:
+            compatible_version(name, old, new)
+        except ValueError:
+            reviewed = {"tool": name, "from": old, "to": new}
+            if not migrate or reviewed not in latest.get("reviewed_version_migrations", []):
+                raise
+            print("Applying explicitly reviewed version migration: " + json.dumps(reviewed))
+
     baseline_path = safe_tool_path(target, ".quality/baseline.json")
     if baseline_path.exists():
         baseline = json.loads(baseline_path.read_text())
@@ -586,6 +602,10 @@ def plan_tooling_update(
             ".quality/" + name: safe_tool_path(target, ".quality/" + name).read_text()
             for name in ("install.py", "run.py", "jsonc.py", "requirements.in")
         }
+        if config.get("runtime_api", 1) >= 2:
+            files[".quality/maintenance.py"] = safe_tool_path(
+                target, ".quality/maintenance.py"
+            ).read_text()
         for project in config.get("node_projects", []):
             name = (Path(project) / "package.json").as_posix()
             path = safe_tool_path(target, name)
@@ -611,13 +631,18 @@ def plan_tooling_update(
         not isinstance(baseline.get(key), dict) for key in ("python", "node", "binaries", "runtime")
     ):
         raise ValueError("Invalid tooling ownership record")
+    migration = baseline.get("runtime_api") == 1 and latest["runtime_api"] == 2 and migrate
     if (
         baseline.get("schema") != 1
         or baseline.get("runtime_api") != latest["runtime_api"]
+        and not migration
         or config.get("runtime_api", 1) != baseline["runtime_api"]
     ):
         raise ValueError("Suite runtime change requires an explicit migration")
-    if set(baseline["runtime"]) != {".quality/install.py", ".quality/run.py", ".quality/jsonc.py"}:
+    expected_runtime = {".quality/install.py", ".quality/run.py", ".quality/jsonc.py"}
+    if baseline["runtime_api"] >= 2:
+        expected_runtime.add(".quality/maintenance.py")
+    if set(baseline["runtime"]) != expected_runtime:
         raise ValueError("Invalid suite runtime ownership record")
     edits: dict[str, str] = {}
     requirements_path = safe_tool_path(target, ".quality/requirements.in")
@@ -626,7 +651,7 @@ def plan_tooling_update(
         new = latest["python"].get(name)
         if new is None:
             raise ValueError("Removed Python tool requires migration: " + name)
-        compatible_version(name, old, new)
+        check_version(name, old, new)
         if (
             config["python"].get(name) != old
             or requirements.splitlines().count(name + "==" + old) != 1
@@ -649,6 +674,8 @@ def plan_tooling_update(
         text = path.read_text()
         package = json.loads(text)
         for field, values in owned.items():
+            if not isinstance(values, dict):
+                raise ValueError("Invalid dependency ownership values: " + name + ": " + field)
             for tool, old in values.items():
                 if package.get(field, {}).get(tool) != old:
                     raise ValueError("Locally changed suite dependency: " + name + ": " + tool)
@@ -663,11 +690,9 @@ def plan_tooling_update(
                     ):
                         raise ValueError("Override structure change requires migration: " + tool)
                     for dependency in old:
-                        compatible_version(
-                            tool + "/" + dependency, old[dependency], new[dependency]
-                        )
+                        check_version(tool + "/" + dependency, old[dependency], new[dependency])
                 else:
-                    compatible_version(tool, old, new)
+                    check_version(tool, old, new)
                 package[field][tool] = new
                 values[tool] = new
         edits[name] = merge_jsonc(
@@ -677,7 +702,7 @@ def plan_tooling_update(
         new = latest["binaries"].get(name)
         if new is None or new["repository"] != old["repository"]:
             raise ValueError("Binary source change requires migration: " + name)
-        compatible_version(name, old["version"], new["version"])
+        check_version(name, old["version"], new["version"])
         if config["binaries"].get(name) != old:
             raise ValueError("Locally changed binary configuration: " + name)
         config["binaries"][name] = new
@@ -689,6 +714,15 @@ def plan_tooling_update(
         content = (SOURCE / "templates/quality" / Path(name).name).read_text()
         edits[name] = content
         baseline["runtime"][name] = hashlib.sha256(content.encode()).hexdigest()
+    if migration:
+        print(
+            "Reviewed migration: runtime API 1 -> 2 (isolated Python tools and owned npm audits)."
+        )
+        new_file = ".quality/maintenance.py"
+        edits[new_file] = (SOURCE / "templates/quality/maintenance.py").read_text()
+        baseline["runtime"][new_file] = hashlib.sha256(edits[new_file].encode()).hexdigest()
+        edits.update(plan_isolation_migration(target, config, edits))
+        baseline["runtime_api"] = 2
     config["runtime_api"] = latest["runtime_api"]
     for owned in baseline["node"].values():
         for field, values in owned.items():
@@ -718,10 +752,150 @@ def plan_tooling_update(
     }, config
 
 
+def plan_isolation_migration(
+    target: Path, config: dict[str, Any], edits: dict[str, str]
+) -> dict[str, str]:
+    changes: dict[str, str] = {}
+    env = safe_tool_path(target, ".quality/env.sh")
+    changes[".quality/env.sh"] = env.read_text().replace(
+        "$(git rev-parse --show-toplevel)/.venv/bin:",
+        "$(git rev-parse --show-toplevel)/.venv/bin:"
+        "$(git rev-parse --show-toplevel)/.tools/venv/bin:",
+    )
+    git = shutil.which("git")
+    if git is None:
+        raise FileNotFoundError("Git is required")
+    inventory, _ = inspect_tooling(target, git)
+    names = set(config.get("managed_tooling", [])) | {
+        entry["path"] for entry in inventory if entry["kind"] == "hook"
+    }
+    for name in sorted(names):
+        path = safe_tool_path(target, name)
+        if not path.is_file():
+            continue
+        text = edits.get(name, path.read_text())
+        if Path(name).name in integration.CONFIGS["pre-commit"]:
+            # Replace only suite hook entries, never retained application checks.
+            updated = re.sub(
+                r"(?m)(entry:\s*)\.venv/bin/python(\s+\.quality/run\.py\s)",
+                r"\1.tools/venv/bin/python\2",
+                text,
+            )
+        elif name == ".vscode/tasks.json":
+            tasks = parse_jsonc(text)
+            for task in tasks.get("tasks", []):
+                if "${workspaceFolder}/.quality/run.py" in task.get("args", []):
+                    task["command"] = "${workspaceFolder}/.tools/venv/bin/python"
+            updated = merge_jsonc(text, tasks, replace_values=True)
+        elif name == ".vscode/settings.json":
+            settings = parse_jsonc(text)
+            if settings.get("ruff.path") == ["${workspaceFolder}/.venv/bin/ruff"]:
+                updated = merge_jsonc(
+                    text,
+                    {"ruff.path": ["${workspaceFolder}/.tools/venv/bin/ruff"]},
+                    replace_values=True,
+                )
+            else:
+                updated = text
+        elif name.endswith("package.json"):
+            package = json.loads(text)
+            scripts = {
+                key: value.replace(
+                    ".venv/bin/python .quality/run.py", ".tools/venv/bin/python .quality/run.py"
+                )
+                for key, value in package.get("scripts", {}).items()
+                if isinstance(value, str) and ".venv/bin/python .quality/run.py" in value
+            }
+            updated = merge_jsonc(text, {"scripts": scripts}, replace_values=True)
+        elif name == "AGENTS.md":
+            updated = text.replace(
+                ".venv/bin/python .quality/run.py", ".tools/venv/bin/python .quality/run.py"
+            )
+            updated = updated.replace("`.venv/bin/pre-commit`", "`.tools/venv/bin/pre-commit`")
+        elif name.startswith(".husky/") or any(part == "hooks" for part in Path(name).parts):
+            updated = text.replace(
+                '/.venv/bin/python" ".quality/run.py"', '/.tools/venv/bin/python" ".quality/run.py"'
+            ).replace(".venv/bin/python .quality/run.py", ".tools/venv/bin/python .quality/run.py")
+            updated = updated.replace(
+                "INSTALL_PYTHON=" + str(target / ".venv/bin/python"),
+                "INSTALL_PYTHON=" + str(target / ".tools/venv/bin/python"),
+            ).replace(
+                "INSTALL_PYTHON='" + str(target / ".venv/bin/python") + "'",
+                "INSTALL_PYTHON='" + str(target / ".tools/venv/bin/python") + "'",
+            )
+        else:
+            updated = text
+        if updated != text:
+            changes[name] = updated
+    return changes
+
+
+def recover_tooling(target: Path, backup_name: str | None = None) -> None:
+    pending = safe_tool_path(target, ".tools/update-pending.json")
+    if backup_name is None:
+        if not pending.exists():
+            raise ValueError(
+                "No interrupted update; pass --recover-tooling .tools/backups/update-<id>"
+            )
+        backup_name = json.loads(pending.read_text())["backup"]
+    if not isinstance(backup_name, str) or not backup_name.startswith(".tools/backups/update-"):
+        raise ValueError("Recovery must use a project update backup")
+    backup = safe_tool_path(target, backup_name)
+    inventory = json.loads((backup / "restore.json").read_text())
+    restore = inventory["restore"]
+    remove = inventory["remove_if_created"]
+    if not isinstance(restore, list) or not isinstance(remove, list):
+        raise ValueError("Invalid recovery inventory")
+    for name in [*restore, *remove]:
+        if not isinstance(name, str):
+            raise ValueError("Invalid recovery path")
+        safe_tool_path(target, name)
+        if name in restore and not safe_tool_path(target, backup_name + "/" + name).is_file():
+            raise ValueError("Recovery backup file missing: " + name)
+    with pending.open("w") as marker:
+        marker.write(json.dumps({"backup": backup_name, "recovery": True}) + "\n")
+    for name in restore:
+        destination = safe_tool_path(target, name)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(safe_tool_path(target, backup_name + "/" + name), destination)
+    for name in remove:
+        path = safe_tool_path(target, name)
+        if path.exists():
+            path.unlink()
+    config = parse_jsonc(safe_tool_path(target, ".quality/config.json").read_text())
+    interpreter = sys.executable
+    if config.get("runtime_api", 1) >= 2:
+        interpreter = str(Path(sys.base_prefix) / "bin/python3")
+        if not Path(interpreter).is_file():
+            raise FileNotFoundError("Base interpreter required for rebuilding tooling environment")
+        environment = safe_tool_path(target, ".tools/venv")
+        if environment.exists():
+            shutil.rmtree(environment)
+    subprocess.run(  # noqa: S603 -- backed-up project installer and fixed recovery mode
+        [interpreter, str(target / ".quality/install.py"), "--restore-tools"],
+        cwd=target,
+        check=True,
+    )
+    pending.unlink()
+    print(
+        "Recovered backup and installed tools. "
+        + (
+            "Application .venv was not modified."
+            if config.get("runtime_api", 1) >= 2
+            else "API 1 restored its legacy shared environment; review application dependencies."
+        )
+    )
+
+
 def update_tooling(
-    target: Path, *, preview: bool = False, yes: bool = False, adopt: bool = False
+    target: Path,
+    *,
+    preview: bool = False,
+    yes: bool = False,
+    adopt: bool = False,
+    migrate: bool = False,
 ) -> None:
-    edits, config = plan_tooling_update(target, adopt=adopt)
+    edits, config = plan_tooling_update(target, adopt=adopt, migrate=migrate)
     if not edits:
         print("Tooling is already up to date; no changes made.")
         return
@@ -756,6 +930,8 @@ def update_tooling(
             print("Update cancelled; no changes made.")
             return
     lock_names = {".quality/locked/requirements.txt"}
+    for binary in config["binaries"]:
+        lock_names.update({".tools/bin/" + binary, ".tools/bin/" + binary + ".sha256"})
     for project in config.get("node_projects", []):
         for lock in ("package-lock.json", "npm-shrinkwrap.json"):
             lock_names.add((Path(project) / lock).as_posix())
@@ -771,7 +947,7 @@ def update_tooling(
         if content is not None:
             path = backup / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
+            shutil.copy2(safe_tool_path(target, name), path)
     backup.mkdir(parents=True, exist_ok=True)
     (backup / "restore.json").write_text(
         json.dumps(
@@ -804,11 +980,7 @@ def update_tooling(
                 [
                     str(target / "node_modules/.bin/prettier"),
                     "--write",
-                    *(
-                        name
-                        for name in (".quality/config.json", ".quality/baseline.json")
-                        if name in edits
-                    ),
+                    *(name for name in edits if name.endswith(".json")),
                 ],
                 cwd=target,
                 check=True,
@@ -818,6 +990,8 @@ def update_tooling(
         environment["PATH"] = (
             str(target / ".venv/bin")
             + ":"
+            + str(target / ".tools/venv/bin")
+            + ":"
             + str(target / "node_modules/.bin")
             + ":"
             + str(target / ".tools/bin")
@@ -826,9 +1000,9 @@ def update_tooling(
         )
         if config["hook_manager"] == "pre-commit":
             commands = [
-                [str(target / ".venv/bin/pre-commit"), "run", "--all-files"],
+                [str(target / ".tools/venv/bin/pre-commit"), "run", "--all-files"],
                 [
-                    str(target / ".venv/bin/pre-commit"),
+                    str(target / ".tools/venv/bin/pre-commit"),
                     "run",
                     "--hook-stage",
                     "pre-push",
@@ -874,11 +1048,17 @@ def update_tooling(
                     path.unlink()
             else:
                 path.write_bytes(content)
-        pending.unlink()
+        pending.write_text(
+            json.dumps({"backup": str(backup.relative_to(target)), "files_restored": True}) + "\n"
+        )
         print(
             "Update failed; manifests, locks and runtime restored. Installed environments may "
-            "have changed. Restore them with python3 .quality/install.py --restore-tools "
-            "(older installers: python3 .quality/install.py). Backups: " + str(backup),
+            "have changed. Recover files and tools with bootstrap.sh --target "
+            + str(target)
+            + " --recover-tooling "
+            + str(backup.relative_to(target))
+            + ". Backups: "
+            + str(backup),
             file=sys.stderr,
         )
         raise
@@ -894,6 +1074,7 @@ def scaffold(
     policy: str | None = None,
     inventory: list[dict[str, Any]] | None = None,
     hook_directory: Path | None = None,
+    ci: bool = False,
 ) -> None:
     python = "python" in languages
     node = bool(languages - {"python"})
@@ -924,6 +1105,13 @@ def scaffold(
             json.loads(path.read_text())
         add(name, merge_jsonc(path.read_text() if path.exists() else "{}\n", values))
 
+    if ci:
+        workflow = ".github/workflows/quality.yml"
+        content = (SOURCE / "templates/quality/github-quality.yml").read_text()
+        path = safe_tool_path(target, workflow)
+        if path.exists() and path.read_text() != content:
+            raise ValueError("Existing CI workflow needs manual reconciliation: " + workflow)
+        add(workflow, content)
     manifest = json.loads((SOURCE / "templates/quality/versions.json").read_text())
     manifest["languages"] = sorted(languages)
     manifest["semgrep_config"] = "p/security-audit"
@@ -981,11 +1169,12 @@ def scaffold(
         add(".quality/config.json", merge_jsonc(json.dumps(current, indent=2), manifest) + "\n")
     else:
         merge(".quality/config.json", manifest)
-    for name in ("run.py", "install.py", "jsonc.py"):
+    for name in ("run.py", "install.py", "jsonc.py", "maintenance.py"):
         add(".quality/" + name, (SOURCE / "templates/quality" / name).read_text())
     add(
         ".quality/env.sh",
         'export PATH="$(git rev-parse --show-toplevel)/.venv/bin:'
+        "$(git rev-parse --show-toplevel)/.tools/venv/bin:"
         "$(git rev-parse --show-toplevel)/node_modules/.bin:"
         '$(git rev-parse --show-toplevel)/.tools/bin:$PATH"\n',
     )
@@ -1020,7 +1209,7 @@ def scaffold(
     ]
     missing = [p for p in patterns if p not in ignore.splitlines()]
     add(".gitignore", ignore.rstrip() + "\n" + "\n".join(missing) + "\n" if missing else ignore)
-    runner = ".venv/bin/python .quality/run.py"
+    runner = ".tools/venv/bin/python .quality/run.py"
     recommendations = ["redhat.vscode-yaml"]
     settings: dict[str, Any] = {
         "files.exclude": {"**/.tools": True, "**/.venv": True, "**/node_modules": True},
@@ -1048,7 +1237,7 @@ def scaffold(
             {
                 "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
                 "python.analysis.typeCheckingMode": "standard",
-                "ruff.path": ["${workspaceFolder}/.venv/bin/ruff"],
+                "ruff.path": ["${workspaceFolder}/.tools/venv/bin/ruff"],
                 "ruff.importStrategy": "fromEnvironment",
                 "[python]": {
                     "editor.defaultFormatter": "charliermarsh.ruff",
@@ -1097,6 +1286,8 @@ def scaffold(
                     "quality:types": runner + " types",
                     "quality:security": runner + " security",
                     "quality:docker": runner + " docker",
+                    "quality:doctor": runner + " doctor",
+                    "quality:freshness": runner + " freshness",
                 },
             },
         )
@@ -1213,12 +1404,22 @@ def scaffold(
         {
             "label": "Quality: " + name,
             "type": "process",
-            "command": "${workspaceFolder}/.venv/bin/python",
+            "command": "${workspaceFolder}/.tools/venv/bin/python",
             "args": ["${workspaceFolder}/.quality/run.py", name],
             "options": {"cwd": "${workspaceFolder}"},
             "problemMatcher": [],
         }
-        for name in ("check", "format", "lint", "types", "schemas", "security", "docker")
+        for name in (
+            "check",
+            "format",
+            "lint",
+            "types",
+            "schemas",
+            "security",
+            "docker",
+            "doctor",
+            "freshness",
+        )
     ]
     tasks_path = target / ".vscode/tasks.json"
     # Labels are task identities, not the full task object.
@@ -1263,12 +1464,15 @@ def scaffold(
             "\n" + marker + "\n\n"
             "All rules above remain applicable. "
             "Use the following local commands for this profile:\n\n"
-            "- `.venv/bin/python .quality/run.py check`: "
+            "- `.tools/venv/bin/python .quality/run.py check`: "
             "formatting, lint, types, schemas, Docker.\n"
-            "- `.venv/bin/python .quality/run.py security`: Gitleaks, Semgrep, Trivy.\n"
-            "- `.venv/bin/python .quality/run.py commit`: fast checks and staged secret scanning.\n"
-            "- `.venv/bin/python .quality/run.py push`: full checks and security scanning.\n\n"
-            "Python/mixed repositories use `.venv/bin/pre-commit`; Node-only repositories use "
+            "- `.tools/venv/bin/python .quality/run.py security`: Gitleaks, Semgrep, Trivy.\n"
+            "- `.tools/venv/bin/python .quality/run.py commit`: "
+            "fast checks and staged secret scanning.\n"
+            "- `.tools/venv/bin/python .quality/run.py push`: "
+            "full checks and security scanning.\n\n"
+            "Python/mixed repositories use `.tools/venv/bin/pre-commit`; "
+            "Node-only repositories use "
             "Husky instead. For Node-only repositories, the commit/push commands above replace "
             "the two pre-commit framework validation commands; do not add a second hook manager.\n"
             "Use `.tools/bin/trivy` instead of a globally installed Trivy. "
@@ -1489,6 +1693,9 @@ def main() -> int:
         help="Generate files; install later with .quality/install.py",
     )
     parser.add_argument(
+        "--ci", action="store_true", help="Add a non-overwriting GitHub Actions quality workflow"
+    )
+    parser.add_argument(
         "--update-tooling",
         action="store_true",
         help="Update owned tooling from this checkout; preserve application settings and hooks",
@@ -1502,12 +1709,40 @@ def main() -> int:
         action="store_true",
         help="Explicitly adopt exact matching tooling in projects predating ownership records",
     )
+    parser.add_argument(
+        "--migrate-tooling",
+        action="store_true",
+        help="Apply only supported runtime or explicitly reviewed exact version migrations",
+    )
+    parser.add_argument(
+        "--recover-tooling",
+        nargs="?",
+        const="pending",
+        help="Recover an interrupted update or a named .tools/backups/update-<id> backup",
+    )
     args = parser.parse_args()
+    if args.ci and args.detect_only:
+        parser.error("--ci cannot be combined with --detect-only")
+    if args.recover_tooling and (
+        args.update_tooling
+        or args.ci
+        or args.languages
+        or args.existing_tools
+        or args.detect_only
+        or args.configure_only
+        or args.preview
+        or args.yes
+        or args.adopt_tooling
+        or args.migrate_tooling
+    ):
+        parser.error("--recover-tooling cannot be combined with setup/update options")
     if args.update_tooling and (
-        args.languages or args.existing_tools or args.detect_only or args.configure_only
+        args.languages or args.existing_tools or args.detect_only or args.configure_only or args.ci
     ):
         parser.error("--update-tooling cannot be combined with setup or detection options")
-    if not args.update_tooling and (args.preview or args.yes or args.adopt_tooling):
+    if not args.update_tooling and (
+        args.preview or args.yes or args.adopt_tooling or args.migrate_tooling
+    ):
         parser.error("--preview, --yes and --adopt-tooling require --update-tooling")
     if sys.version_info < (3, 11):  # noqa: UP036 -- explicit bootstrap prerequisite diagnostic
         parser.error("Python 3.11+ is required")
@@ -1538,8 +1773,19 @@ def main() -> int:
     if not args.detect_only:
         print("Destination repository: " + str(target), flush=True)
     try:
+        if args.recover_tooling:
+            recover_tooling(
+                target, None if args.recover_tooling == "pending" else args.recover_tooling
+            )
+            return 0
         if args.update_tooling:
-            update_tooling(target, preview=args.preview, yes=args.yes, adopt=args.adopt_tooling)
+            update_tooling(
+                target,
+                preview=args.preview,
+                yes=args.yes,
+                adopt=args.adopt_tooling,
+                migrate=args.migrate_tooling,
+            )
             return 0
         if (
             not args.detect_only
@@ -1592,6 +1838,8 @@ def main() -> int:
             ]
             if args.configure_only:
                 arguments.append("--configure-only")
+            if args.ci:
+                arguments.append("--ci")
             result = ensure_configuration_parsers(target, arguments)
             if result is not None:
                 return result
@@ -1602,6 +1850,7 @@ def main() -> int:
             policy=policy,
             inventory=inventory,
             hook_directory=hook_directory,
+            ci=args.ci,
         )
         if not args.configure_only:
             subprocess.run(  # noqa: S603 -- fixed interpreter and generated installer; no shell

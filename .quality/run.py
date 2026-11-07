@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 from jsonc import parse_jsonc
+from maintenance import audit_node, doctor, freshness, scan_receipt
 
 ROOT = Path(__file__).resolve().parents[1]
 EXCLUDED = {
@@ -143,16 +144,31 @@ def main() -> int:
             "docker",
             "commit",
             "push",
+            "doctor",
+            "status",
+            "freshness",
         ],
     )
+    parser.add_argument(
+        "--offline", action="store_true", help="Use local rules and cached databases/audits"
+    )
     args = parser.parse_args()
+    if args.offline and args.action not in {"security", "push"}:
+        parser.error("--offline requires security or push")
     config = parse_jsonc((ROOT / ".quality/config.json").read_text())
+    if args.action in {"doctor", "status"}:
+        report = doctor(ROOT, config)
+        print(json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+    if args.action == "freshness":
+        print(json.dumps(freshness(ROOT), indent=2))
+        return 0
     languages = set(config["languages"])
     python = "python" in languages
     node = bool(languages - {"python"}) or config.get("hook_manager") == "husky"
     node_projects = [ROOT / project for project in config.get("node_projects", ["."])]
     files = source_files()
-    executable = str(ROOT / ".venv/bin/python")
+    executable = str(ROOT / ".tools/venv/bin/python")
     npm_bin = ROOT / "node_modules/.bin"
     tools = ROOT / ".tools/bin"
     scanner_configs = {
@@ -260,12 +276,19 @@ def main() -> int:
                 print("TypeScript: not applicable (no application source files yet).")
         if python:
             for project in config.get("python_projects", ["."]):
+                interpreters = [ROOT / project / ".venv/bin/python", ROOT / ".venv/bin/python"]
+                application_python = next(
+                    (path for path in interpreters if path.exists()),
+                    Path(sys.base_prefix) / "bin/python3",
+                )
+                if not application_python.exists():
+                    raise FileNotFoundError("Application/base Python interpreter is missing")
                 run(
                     executable,
                     "-m",
                     "pyright",
                     "--pythonpath",
-                    executable,
+                    str(application_python),
                     "--project",
                     str(ROOT / project),
                 )
@@ -283,7 +306,7 @@ def main() -> int:
                         inputs.append(name)
                 print("Validating schemas: " + ", ".join(item["files"]), flush=True)
                 run(
-                    str(ROOT / ".venv/bin/check-jsonschema"),
+                    str(ROOT / ".tools/venv/bin/check-jsonschema"),
                     "--schemafile",
                     item["schema"],
                     *inputs,
@@ -300,6 +323,12 @@ def main() -> int:
             ".",
         )
     if action in {"security", "push"}:
+        if args.offline and not Path(config["semgrep_config"]).is_file():
+            raise ValueError(
+                "Offline Semgrep requires a reviewed local rule file, not registry rules"
+            )
+        if node:
+            audit_node(ROOT, config, offline=args.offline)
         for path in scanner_configs.get("gitleaks", []):
             if path.parent != ROOT:
                 run(
@@ -312,7 +341,7 @@ def main() -> int:
                     directory=path.parent,
                 )
         run(
-            str(ROOT / ".venv/bin/semgrep"),
+            str(ROOT / ".tools/venv/bin/semgrep"),
             "scan",
             "--config",
             config["semgrep_config"],
@@ -325,7 +354,7 @@ def main() -> int:
         for path in scanner_configs.get("semgrep", []):
             if path.name != ".semgrepignore":
                 run(
-                    str(ROOT / ".venv/bin/semgrep"),
+                    str(ROOT / ".tools/venv/bin/semgrep"),
                     "scan",
                     "--config",
                     str(path),
@@ -366,10 +395,22 @@ def main() -> int:
                 ".quality",
                 "--skip-dirs",
                 "node_modules",
+                "--skip-files",
+                "**/package-lock.json",
+                "--skip-files",
+                "**/npm-shrinkwrap.json",
+                "--skip-files",
+                "**/package.json",
+                *(
+                    ["--skip-db-update", "--skip-java-db-update", "--offline-scan"]
+                    if args.offline
+                    else []
+                ),
                 *options,
                 ".",
                 directory=scope,
             )
+        scan_receipt(ROOT, config, args.offline)
     if action == "docker" or check:
         docker_checks(files, config["docker"])
     return 0

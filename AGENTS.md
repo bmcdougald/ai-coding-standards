@@ -98,12 +98,12 @@ Notes or known limitations:
 
 All rules above remain applicable. Use the following local commands for this profile:
 
-- `.venv/bin/python .quality/run.py check`: formatting, lint, types, schemas, Docker.
-- `.venv/bin/python .quality/run.py security`: Gitleaks, Semgrep, Trivy.
-- `.venv/bin/python .quality/run.py commit`: fast checks and staged secret scanning.
-- `.venv/bin/python .quality/run.py push`: full checks and security scanning.
+- `.tools/venv/bin/python .quality/run.py check`: formatting, lint, types, schemas, Docker.
+- `.tools/venv/bin/python .quality/run.py security`: Gitleaks, Semgrep, Trivy.
+- `.tools/venv/bin/python .quality/run.py commit`: fast checks and staged secret scanning.
+- `.tools/venv/bin/python .quality/run.py push`: full checks and security scanning.
 
-Python/mixed repositories use `.venv/bin/pre-commit`; Node-only repositories use Husky instead. For Node-only repositories, the commit/push commands above replace the two pre-commit framework validation commands; do not add a second hook manager.
+Python/mixed repositories use `.tools/venv/bin/pre-commit`; Node-only repositories use Husky instead. For Node-only repositories, the commit/push commands above replace the two pre-commit framework validation commands; do not add a second hook manager.
 Use `.tools/bin/trivy` instead of a globally installed Trivy. The security command applies project exclusions and configured severity thresholds.
 Docker runtime checks stay configured. Missing Docker CLI, Compose plugin, or accessible daemon is an explicit dependency skip, not a successful validation. Invalid configurations and failed builds/scans must fail. Do not install Docker or change build targets without approval.
 See [setup and usage](QUALITY.md) for tool responsibilities and commands.

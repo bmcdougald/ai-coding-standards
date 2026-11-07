@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "runtime_api": 1,
-  "source_digest": "82da213e00c6bac425b36ff80c00bff94bb7aa4517cebf588407b0ecb3f2d60a",
+  "runtime_api": 2,
+  "source_digest": "6b36199389391f59da57c2bd6874365eb58a1bb5cf7b0bc712462ed15c08a93e",
   "python": {
     "pip": "26.3",
     "semgrep": "1.184.0",
@@ -111,8 +111,9 @@
     }
   },
   "runtime": {
-    ".quality/install.py": "b785a1bb1028e032a7b1319ba62bf7cadcb016a95d8e583ccc1754c4251d393e",
-    ".quality/run.py": "5f3fd8d802d0e431f50d936d3c2679fbc5c7c2c5ee64a7757e855245534fd170",
-    ".quality/jsonc.py": "b8c0930207bf40078c88b5ae68827a46678416198ee788a0713ba74f0d646b10"
+    ".quality/install.py": "e1019270df53f8080a921b343f73ae603419b9131d2d8ae3176f3a822cbab047",
+    ".quality/run.py": "f7af1d41244af3af3b656f8092eef466502cf14b3007e897e69046b649d98324",
+    ".quality/jsonc.py": "b8c0930207bf40078c88b5ae68827a46678416198ee788a0713ba74f0d646b10",
+    ".quality/maintenance.py": "addeb2dbba4116e28d0770a69d0577db2729d63abcaed3b161cdfa632e6673c8"
   }
 }

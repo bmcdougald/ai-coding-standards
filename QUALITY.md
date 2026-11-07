@@ -30,6 +30,10 @@ record limits updates to suite dependencies and compatible runtime scripts,
 preserving application dependencies/configuration, analyzer rules and hooks.
 Retained amendment dependencies stay unowned. Local ownership conflicts, major
 upgrades, pre-1.0 minor upgrades and runtime API migrations stop before writes.
+Use `--migrate-tooling` only for a supported reviewed transition. API 1 -> 2 isolates
+Python tools under `.tools/venv`, retaining the application's `.venv` and rewiring
+only suite commands and standard tool settings. Other exact version migrations
+must be declared by maintainers; the flag never permits arbitrary breaking changes.
 Projects predating the record need explicit `--adopt-tooling` after reviewing its
 preview; unfamiliar runtime modifications cannot be adopted automatically.
 
@@ -37,12 +41,28 @@ Updates back up affected files under `.tools/backups/update-<id>/`, install with
 running npm lifecycle scripts or reinstalling hooks, and validate both configured
 hook stages. Suite formatting is check-only; retained custom hooks may have side
 effects, and remote-dependent hooks still need a real push. Failed updates restore
-manifests/locks/runtime but may leave installed environments changed: run
-`python3 .quality/install.py --restore-tools` (the normal installer for older
-runtimes). Review shared transitive lock changes and run application tests before
+manifests/locks/runtime but may leave installed environments changed: from the
+standards checkout, run `bash scripts/bootstrap.sh --target /path/to/project --recover-tooling`.
+It restores the pending backup and recreates the isolated tooling environment;
+failures remain pending and retryable. To revert a successful update, specify
+`--recover-tooling .tools/backups/update-<id>`. API 1 recovery uses the older shared
+environment and cannot remove unrelated packages safely.
+Recovery also suppresses npm lifecycle scripts; native application modules may
+need a project-approved rebuild before application checks.
+Review shared transitive lock changes and run application tests before
 committing. Updating the standards checkout alone never changes an application.
 
 ## First setup
+
+Python tooling is installed in `.tools/venv`, separately from the application's
+`.venv`. Setup never installs application packages or creates an application
+environment. Pylance/Pyright use the application interpreter when available; Ruff
+and all scanner commands use the tooling environment.
+
+Run `python3 .quality/run.py doctor` (or `status`) for JSON health/version/lock/hook
+reports; unhealthy tool state returns failure. `freshness` reports the last security
+scan and Trivy database metadata, including explicitly missing data. Docker dependency
+availability is separate from validation success.
 
 Prerequisites: Git, Python 3.11+ with `venv` support, and Node.js 22.13+ with npm
 for JavaScript/TypeScript/React projects. Linux and macOS x86_64/arm64 are supported;
@@ -115,18 +135,18 @@ workflow; Git does not commit hook-directory files.
 
 ## What is installed
 
-| Tools                                        | Location                  | Purpose                                               |
-| -------------------------------------------- | ------------------------- | ----------------------------------------------------- |
-| Prettier                                     | `node_modules`            | Format JS/TS, JSON, YAML, Markdown and web files      |
-| ESLint and selected TS/React plugins         | `node_modules`            | Lint JS/TS/JSX/TSX and React Hooks/accessibility      |
-| TypeScript                                   | `node_modules`            | Check types, including JavaScript with `checkJs`      |
-| Ruff, Pyright (Python profiles)              | `.venv`                   | Python formatting, lint and types                     |
-| check-jsonschema                             | `.venv`                   | Validate configured JSON/YAML schemas                 |
-| Semgrep                                      | `.venv`                   | Source-code security analysis, metrics disabled       |
-| Gitleaks                                     | `.tools/bin`              | Staged and working-tree secret detection              |
-| Trivy                                        | `.tools/bin`              | Dependency, secret, infrastructure and image scanning |
-| Hadolint                                     | `.tools/bin`              | Dockerfile lint without Docker                        |
-| pre-commit (Python/mixed), Husky (Node-only) | `.venv` or `node_modules` | Commit and push checks                                |
+| Tools                                        | Location                        | Purpose                                               |
+| -------------------------------------------- | ------------------------------- | ----------------------------------------------------- |
+| Prettier                                     | `node_modules`                  | Format JS/TS, JSON, YAML, Markdown and web files      |
+| ESLint and selected TS/React plugins         | `node_modules`                  | Lint JS/TS/JSX/TSX and React Hooks/accessibility      |
+| TypeScript                                   | `node_modules`                  | Check types, including JavaScript with `checkJs`      |
+| Ruff, Pyright (Python profiles)              | `.tools/venv`                   | Python formatting, lint and types                     |
+| check-jsonschema                             | `.tools/venv`                   | Validate configured JSON/YAML schemas                 |
+| Semgrep                                      | `.tools/venv`                   | Source-code security analysis, metrics disabled       |
+| Gitleaks                                     | `.tools/bin`                    | Staged and working-tree secret detection              |
+| Trivy                                        | `.tools/bin`                    | Dependency, secret, infrastructure and image scanning |
+| Hadolint                                     | `.tools/bin`                    | Dockerfile lint without Docker                        |
+| pre-commit (Python/mixed), Husky (Node-only) | `.tools/venv` or `node_modules` | Commit and push checks                                |
 
 Release binaries have pinned SHA-256 checksums. Initial Python dependency
 resolution generates `.quality/locked/requirements.txt`; npm generates `package-lock.json`.
@@ -146,10 +166,10 @@ dependency findings and the monthly/pre-release update checklist.
 ## Usage
 
 ```sh
-.venv/bin/python .quality/run.py format    # apply formatting
-.venv/bin/python .quality/run.py check     # format check, lint, types, schemas, Docker
-.venv/bin/python .quality/run.py security  # Gitleaks, Semgrep, Trivy
-.venv/bin/python .quality/run.py docker    # Docker runtime checks only
+.tools/venv/bin/python .quality/run.py format    # apply formatting
+.tools/venv/bin/python .quality/run.py check     # format check, lint, types, schemas, Docker
+.tools/venv/bin/python .quality/run.py security  # Gitleaks, Semgrep, Trivy
+.tools/venv/bin/python .quality/run.py docker    # Docker runtime checks only
 ```
 
 Individual actions: `lint`, `types`, `schemas`, `commit`, `push`.
@@ -216,9 +236,14 @@ explicit `p/security-audit` rule pack; it downloads rules without uploading sour
 or enabling metrics. Use a reviewed local rule file for offline scans.
 Trivy downloads vulnerability databases; caches are stored under `.tools/cache`.
 Application scans exclude `.quality`, `.venv`, `.tools` and `node_modules`;
-Trivy's default npm scope omits development dependencies. Application source,
-requirements and runtime dependency locks stay in scope.
-Offline scanning requires prepopulated databases/rules.
+The npm advisory audit includes application development dependencies and shared
+transitives, excluding only suite-owned roots; it fails on ownership/lock drift.
+Trivy handles application Python requirements/locks and other filesystem artifacts,
+but npm manifests/locks are excluded there to avoid ownership-blind duplicate audits.
+Offline scanning requires prepopulated databases and a reviewed local Semgrep rule
+file. Pass `security --offline` to disable database updates and use npm advisory
+results cached against the exact lock for at most 24 hours; missing/stale caches fail.
+Receipts record local rule hashes, but registry packs are not immutably pinned.
 
 Add application schemas to `.quality/schemas.json` as
 `{"schema": "schemas/app.json", "files": ["config.yaml"]}` entries in `checks`.
@@ -245,4 +270,16 @@ Configured builds and image scans require an accessible Docker daemon. Missing
 Docker dependencies produce **SKIPPED: skipped due to missing local docker
 dependencies**, then run automatically after installation. Invalid Compose,
 failed builds and scan findings fail normally. A dependency skip is not a passed
-scan; inspect output before claiming validation. CI/pipeline setup is not included.
+scan; inspect output before claiming validation.
+
+## GitHub Actions
+
+Pass `--ci` during setup to add a non-overwriting quality workflow with read-only
+permissions and commit-pinned actions. It restores local tools and runs application
+checks/security and retained hook stages.
+Add project-specific application environment/dependency restoration and build steps
+before those checks; scanner restoration does not install Python application dependencies.
+Configure the quality job as a required branch-protection check separately.
+Remote-dependent hooks need their own CI
+adaptation. ai-coding-standards audits its tools in a separate scheduled/manual
+workflow; accepted findings remain visibly failing there.

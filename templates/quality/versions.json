@@ -1,5 +1,6 @@
 {
-  "runtime_api": 1,
+  "runtime_api": 2,
+  "reviewed_version_migrations": [],
   "python": {
     "pip": "26.3",
     "semgrep": "1.184.0",

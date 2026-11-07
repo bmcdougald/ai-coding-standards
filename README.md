@@ -78,7 +78,8 @@ not install analyzers in that mode.
 The bootstrapper creates:
 
 - npm development dependencies for Prettier, ESLint, TypeScript and selected React plugins.
-- `.venv` dependencies for Semgrep, check-jsonschema and Python-profile Ruff/Pyright.
+- Isolated `.tools/venv` dependencies for Semgrep, check-jsonschema and Ruff/Pyright.
+  The application's `.venv` is never created, installed into or removed by setup.
 - Checksum-verified Gitleaks, Trivy and Hadolint under ignored `.tools/bin`.
 - Local Git hooks: pre-commit for Python/mixed, Husky for Node-only.
 - Preserved/merged VS Code settings, extension recommendations and **Quality:** tasks.
@@ -105,15 +106,16 @@ without silently changing files after they have been staged.
 
 ```sh
 python3 .quality/install.py                # restore tools/hooks in a fresh clone
-.venv/bin/python .quality/run.py format    # format
-.venv/bin/python .quality/run.py check     # lint/types/schemas/format check/Docker
-.venv/bin/python .quality/run.py security  # secrets/SAST/dependency/infrastructure scans
+.tools/venv/bin/python .quality/run.py format    # format
+.tools/venv/bin/python .quality/run.py check     # lint/types/schemas/format check/Docker
+.tools/venv/bin/python .quality/run.py security  # secrets/SAST/dependency/infrastructure scans
 ```
 
 Docker-independent checks always work. Docker runtime checks stay configured and
 explicitly skip unavailable dependencies, then activate on future runs when
 Docker is available. Builds/image scans require explicit targets; no build context
-is guessed. CI setup is deferred.
+is guessed. Pass `--ci` during setup to add GitHub Actions application gates without
+overwriting an existing workflow.
 
 See the [generated setup and usage guide](templates/quality/USAGE.md) for tool
 responsibilities, IDE integration, configuration, network requirements and Docker
@@ -150,6 +152,17 @@ resolution; review the resulting locks and run your application's tests too.
 
 Updates stop before writes for local changes to owned dependencies/runtime,
 major upgrades, pre-1.0 minor upgrades, downgrades, or runtime API migrations.
+`--migrate-tooling` explicitly enables supported migrations; it is not an unrestricted
+override. Runtime API 1 -> 2 moves Python tooling into `.tools/venv`, rewires only
+suite commands/dispatchers and standard Ruff paths, and enables ownership-aware npm
+audits. Application interpreters, custom tests and existing rules remain unchanged.
+Previously installed scanner packages are not uninstalled from the application's
+legacy environment: recreate it from application manifests separately if cleanup
+is wanted. Suite commands use explicit tool interpreters; retained shell checks
+keep the application `.venv` first on PATH.
+Other version transitions require an exact `{tool, from, to}` entry in the reviewed
+`reviewed_version_migrations` manifest; maintainers must test compatibility before
+publishing one. Unknown runtime transitions still stop.
 Same-major compatibility is not guaranteed by semver alone: maintainers must test
 new exact pins against the suite before publishing them, and bump `runtime_api`
 when preserving existing configurations is not supported. Such migrations require
@@ -171,19 +184,67 @@ remote push arguments; remote-dependent checks also need a real push.
 
 Installation or validation failure restores the backed-up manifests, locks and
 runtime automatically and returns failure. Installed environments may have changed;
-restore them using `python3 .quality/install.py --restore-tools`, or the normal
-installer for older runtimes. Review any files changed by retained third-party
+restore them using `bash scripts/bootstrap.sh --target /path/to/app --recover-tooling`
+from the standards checkout. Recovery restores backed-up files, locks and binary
+permissions, recreates only the isolated tooling environment, and restores npm from
+the old lock without lifecycle scripts. The application's `.venv` is untouched for
+API 2 backups. For API 1 backups, recovery uses the previous shared-environment
+installer; it cannot safely remove unrelated packages from that old environment.
+Recovery suppresses npm lifecycle scripts; application native modules that depend
+on those scripts may need an explicitly reviewed rebuild. Run application checks
+after recovery before assuming the whole application environment is ready.
+Review any files changed by retained third-party
 hooks. No commits are created, and successful updates still require reviewing the
 diff and committing the new baseline/locks. Keep backups until that review passes.
-An interrupted process leaves `.tools/update-pending.json`; subsequent updates
-stop until its recorded backup is recovered using `restore.json`, installed tools
-are restored, and the pending marker is removed.
+Failures and interrupted processes leave `.tools/update-pending.json`; subsequent
+updates stop until the recovery command succeeds. To revert a successful update,
+pass `--recover-tooling .tools/backups/update-<id>` explicitly. Recovery failures
+retain the marker and can be retried; review the backup inventory before recovery.
+
+### Tool health and scan freshness
+
+```sh
+python3 .quality/run.py doctor
+python3 .quality/run.py status
+python3 .quality/run.py freshness
+```
+
+`doctor`/`status` emit JSON and return failure for missing tools, version/ownership
+drift, stale manifests/locks, missing hook wiring or interrupted updates. Docker
+CLI/Compose/daemon availability is reported separately as dependency skips.
+`freshness` reports the last completed security scan and Trivy database metadata;
+missing data is explicit. Executable pins do not pin registry rules or databases.
+Local Semgrep rule files have a recorded SHA-256; registry packs have no immutable
+content identity in the receipt, so repeat results are not guaranteed.
+
+For offline security scans, set `semgrep_config` to a reviewed local rule file and
+run `.tools/venv/bin/python .quality/run.py security --offline`. Trivy must already
+have its databases; updates are disabled. npm uses a cached advisory result tied
+to the exact current lock, no older than 24 hours; absent/expired results fail.
+An offline success is based on cached advisories, not a current vulnerability check.
+
+### CI enforcement
+
+`--ci` installs `.github/workflows/quality.yml` only when absent or identical. It
+uses read-only permissions, commit-pinned official actions, pinned Python/Node
+runtimes, restores reviewed locks, and runs application gates plus retained hook
+checks/tests. Review remote-dependent/custom hook requirements separately.
+Add your project's application dependency/environment restoration and build steps
+before the quality checks; restoring scanner tools does not install Python application dependencies.
+Make the quality job required through branch protection; writing a workflow alone
+does not configure repository enforcement.
+
+The standards repository has a separate scheduled/manual tooling-audit workflow.
+Python and npm audits run independently; accepted findings remain visible as failed
+jobs, not suppressed or treated as application failures. Workflow execution on
+GitHub must be verified after publication; local checks validate structure and
+equivalent commands but cannot certify the hosted run.
 
 ## Bootstrapper tests
 
 ```sh
 python3 .quality/install.py
-.venv/bin/python scripts/verify_python.py
+.tools/venv/bin/python scripts/verify_python.py
 npm run check
 ```
 
@@ -214,8 +275,12 @@ Do not use forced peer-dependency installs or downgrade to an unsupported ESLint
 release to make npm audit pass.
 
 Application repositories ignore generated `.quality`, `.venv`, `.tools` and
-`node_modules` during source/security scanning. Trivy does not include npm
-development dependencies by default. The suite's own Python lock is not part of
+`node_modules` during source/security scanning. A separate npm advisory audit walks
+the application dependency graph, including development dependencies and shared
+transitives, excluding only suite-owned dependency roots. Ownership/manifest/lock
+drift fails explicitly. npm package manifests/locks are excluded from Trivy to avoid
+duplicate findings that cannot distinguish suite ownership. Python requirements and
+locks remain scanned by Trivy; the suite's isolated lock is not part of
 the application's dependency audit; application requirements and locks remain
 in scope. Analyzer installation still verifies checksums and Python dependency
 consistency.
@@ -223,10 +288,10 @@ consistency.
 Tool dependency audits belong here, separately from application commit/push gates:
 
 ```sh
-.venv/bin/python -m pip_audit -r .quality/locked/requirements.txt
+.tools/venv/bin/python -m pip_audit -r .quality/locked/requirements.txt
 npm audit
 # Equivalent manual Python audit hook:
-.venv/bin/pre-commit run dependency-audit --hook-stage manual --all-files
+.tools/venv/bin/pre-commit run dependency-audit --hook-stage manual --all-files
 ```
 
 ## Maintaining and scanning this tooling repository
@@ -259,8 +324,8 @@ For each finding, inspect the advisory, affected versions, fixed versions and
 the dependency chain. For example:
 
 ```sh
-.venv/bin/python -m pip show semgrep mcp opentelemetry-api
-.venv/bin/python -m pip index versions semgrep
+.tools/venv/bin/python -m pip show semgrep mcp opentelemetry-api
+.tools/venv/bin/python -m pip index versions semgrep
 npm explain minimatch
 npm view eslint version engines peerDependencies
 ```
@@ -297,7 +362,7 @@ checksums together. Checksums verify downloads, not absence of vulnerabilities.
 
    This synchronizes owned pins, runtime, configuration, ownership metadata and
    locks without replacing rules/hooks. Major upgrades, pre-1.0 minor upgrades or
-   runtime API changes deliberately stop: implement and test an explicitly reviewed
+   runtime API changes require a supported, explicitly reviewed `--migrate-tooling`
    migration instead of falsifying the recorded baseline. Bump `runtime_api` when
    existing application configuration is incompatible with new runtime behavior.
 
@@ -305,9 +370,9 @@ checksums together. Checksums verify downloads, not absence of vulnerabilities.
    check consistency and refresh the complete tooling lock:
 
    ```sh
-   .venv/bin/python -m pip install -r requirements-dev.txt
-   .venv/bin/python -m pip check
-   .venv/bin/python -m pip freeze --all > .quality/locked/requirements.txt
+   .tools/venv/bin/python -m pip install -r requirements-dev.txt
+   .tools/venv/bin/python -m pip check
+   .tools/venv/bin/python -m pip freeze --all > .quality/locked/requirements.txt
    ```
 
    Review every resolved change; this lock must retain the test/audit/parser
@@ -318,8 +383,8 @@ checksums together. Checksums verify downloads, not absence of vulnerabilities.
 6. Re-run the scans/audits above and both required hook stages:
 
    ```sh
-   .venv/bin/pre-commit run --all-files
-   .venv/bin/pre-commit run --hook-stage pre-push --all-files
+   .tools/venv/bin/pre-commit run --all-files
+   .tools/venv/bin/pre-commit run --hook-stage pre-push --all-files
    git diff --check
    git diff
    git diff --cached

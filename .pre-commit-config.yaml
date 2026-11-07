@@ -3,28 +3,28 @@ repos:
     hooks:
       - id: quality-commit
         name: Project quality (commit)
-        entry: .venv/bin/python .quality/run.py commit
+        entry: .tools/venv/bin/python .quality/run.py commit
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
       - id: quality-push
         name: Project quality (push)
-        entry: .venv/bin/python .quality/run.py push
+        entry: .tools/venv/bin/python .quality/run.py push
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-push]
       - id: repository-tests
         name: Standards repository tests and Python checks
-        entry: .venv/bin/python scripts/verify_python.py
+        entry: .tools/venv/bin/python scripts/verify_python.py
         language: system
         pass_filenames: false
         always_run: true
         stages: [pre-push]
       - id: dependency-audit
         name: Audit standards repository tool dependencies (manual)
-        entry: .venv/bin/python -m pip_audit -r .quality/locked/requirements.txt
+        entry: .tools/venv/bin/python -m pip_audit -r .quality/locked/requirements.txt
         language: system
         pass_filenames: false
         always_run: true

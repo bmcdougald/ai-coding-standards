@@ -109,7 +109,7 @@ def pre_commit_config() -> str:
     for action, stage in (("commit", "pre-commit"), ("push", "pre-push")):
         hooks.append(
             f"      - id: quality-{action}\n        name: Project quality ({action})\n"
-            f"        entry: .venv/bin/python .quality/run.py {action}\n"
+            f"        entry: .tools/venv/bin/python .quality/run.py {action}\n"
             "        language: system\n        pass_filenames: false\n"
             f"        always_run: true\n        stages: [{stage}]\n"
         )
@@ -390,7 +390,7 @@ def plan_integration(
                     continue
                 action = "commit" if path.name == "pre-commit" else "push"
                 root_command = (
-                    '"$(git rev-parse --show-toplevel)/.venv/bin/python" '
+                    '"$(git rev-parse --show-toplevel)/.tools/venv/bin/python" '
                     '"$(git rev-parse --show-toplevel)/.quality/run.py" ' + action
                 )
                 edits[name] = amend_shell_hook(original, root_command)
@@ -401,7 +401,7 @@ def plan_integration(
                 name = (hook_directory / stage).relative_to(target).as_posix()
                 if name not in edits:
                     command = (
-                        '"$(git rev-parse --show-toplevel)/.venv/bin/python" '
+                        '"$(git rev-parse --show-toplevel)/.tools/venv/bin/python" '
                         '"$(git rev-parse --show-toplevel)/.quality/run.py" ' + action
                     )
                     edits[name] = amend_shell_hook("", command)

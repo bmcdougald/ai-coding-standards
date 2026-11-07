@@ -1,0 +1,39 @@
+name: Project quality
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.14.4'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.22.1'
+      - name: Restore reviewed tools
+        run: python3 .quality/install.py --restore-tools
+      - name: Check application artifacts
+        run: .tools/venv/bin/python .quality/run.py push
+      - name: Run retained project hooks and tests
+        shell: bash
+        run: |
+          export PATH="$PWD/.venv/bin:$PWD/.tools/venv/bin:$PWD/node_modules/.bin:$PWD/.tools/bin:$PATH"
+          export QUALITY_UPDATE_CHECK=1
+          manager=$(python3 -c 'import json; print(json.load(open(".quality/config.json"))["hook_manager"])')
+          if [ "$manager" = pre-commit ]; then
+            .tools/venv/bin/pre-commit run --all-files
+            .tools/venv/bin/pre-commit run --hook-stage pre-push --all-files
+          else
+            python3 .quality/install.py
+            hooks=$(git rev-parse --git-path hooks)
+            sh "$hooks/pre-commit"
+            sh "$hooks/pre-push"
+          fi

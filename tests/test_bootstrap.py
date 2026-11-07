@@ -28,6 +28,7 @@ def load(name: str, path: Path):
 
 
 load("jsonc", ROOT / "templates/quality/jsonc.py")
+maintenance = load("maintenance", ROOT / "templates/quality/maintenance.py")
 bootstrap = load("bootstrap", ROOT / "scripts/bootstrap.py")
 runner = load("quality_runner", ROOT / "templates/quality/run.py")
 installer = load("quality_installer", ROOT / "templates/quality/install.py")
@@ -139,7 +140,7 @@ class ToolingUpdateTests(unittest.TestCase):
             self.candidate(source)
             path = source / "templates/quality/versions.json"
             versions = json.loads(path.read_text())
-            versions["runtime_api"] = 2
+            versions["runtime_api"] = 3
             path.write_text(json.dumps(versions))
             with (
                 patch.object(bootstrap, "SOURCE", source),
@@ -299,7 +300,7 @@ class ToolingUpdateTests(unittest.TestCase):
             self.assertEqual(run.call_args_list[-1].args[0][-1], str(root / ".git/hooks/pre-push"))
             self.assertNotIn("pre-commit", run.call_args_list[-1].args[0][0])
 
-    def test_interrupted_install_restores_files_and_clears_recovery_marker(self):
+    def test_interrupted_install_restores_files_and_retains_recovery_marker(self):
         with tempfile.TemporaryDirectory() as temp:
             root, source = Path(temp) / "project", Path(temp) / "source"
             self.project(root)
@@ -314,7 +315,7 @@ class ToolingUpdateTests(unittest.TestCase):
             ):
                 bootstrap.update_tooling(root, yes=True)
             self.assertEqual((root / ".quality/baseline.json").read_bytes(), original)
-            self.assertFalse((root / ".tools/update-pending.json").exists())
+            self.assertTrue((root / ".tools/update-pending.json").exists())
 
     def test_pending_update_blocks_another_update_before_writes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -331,7 +332,7 @@ class ToolingUpdateTests(unittest.TestCase):
             with self.subTest(owns_node=owns_node), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp) / "project"
                 self.project(root, {"javascript"})
-                python = root / ".venv/bin/python"
+                python = root / ".tools/venv/bin/python"
                 python.parent.mkdir(parents=True)
                 python.touch()
                 baseline_path = root / ".quality/baseline.json"
@@ -403,7 +404,7 @@ class ToolingUpdateTests(unittest.TestCase):
             ):
                 bootstrap.update_tooling(root, yes=True)
             self.assertEqual((root / "package.json").read_bytes(), original)
-            self.assertFalse((root / ".tools/update-pending.json").exists())
+            self.assertTrue((root / ".tools/update-pending.json").exists())
 
 
 class DetectionTests(unittest.TestCase):
@@ -1011,10 +1012,10 @@ class ToolingPolicyTests(unittest.TestCase):
             self.reconcile(root, {"python"}, "amend")
             self.write(
                 root,
-                ".venv/bin/python",
+                ".tools/venv/bin/python",
                 '#!/bin/sh\n[ "$#" -eq 2 ] || exit 27\nprintf "suite-%s\\n" "$2" >> checks\n',
             )
-            (root / ".venv/bin/python").chmod(0o755)
+            (root / ".tools/venv/bin/python").chmod(0o755)
             subprocess.run(  # noqa: S603 -- fixture-local hook and fixed test arguments
                 [str(root / ".git/hooks/pre-push"), "origin", "https://example.test/repo"],
                 cwd=root,
@@ -1168,6 +1169,7 @@ class ToolingPolicyTests(unittest.TestCase):
                 with (
                     patch.object(runner, "ROOT", root),
                     patch.object(runner, "run") as run,
+                    patch.object(runner, "audit_node"),
                     patch.object(runner.sys, "argv", ["run.py", action]),
                 ):
                     self.assertEqual(runner.main(), 0)
@@ -1430,7 +1432,7 @@ class BootstrapTests(unittest.TestCase):
             for stage in ("pre-commit", "pre-push"):
                 self.write(root, ".git/hooks/" + stage, "#!/bin/sh\nexit 0\n")
             bootstrap.scaffold(root, {"python"})
-            python = root / ".venv/bin/python"
+            python = root / ".tools/venv/bin/python"
             python.parent.mkdir(parents=True)
             python.touch()
             lock = root / ".quality/locked/requirements.txt"
