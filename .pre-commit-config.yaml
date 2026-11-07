@@ -1,78 +1,31 @@
 repos:
   - repo: local
     hooks:
-      # Fast checks run before each commit.
-
-      - id: prettier
-        name: Format JS/TS/JSON/YAML/Markdown with Prettier
-        entry: npm exec -- prettier --write
-        language: system
-        files: \.(js|jsx|ts|tsx|json|css|scss|md|yaml|yml)$
-
-      - id: eslint
-        name: Lint JavaScript and TypeScript
-        entry: npm exec -- eslint
-        language: system
-        files: \.(js|jsx|ts|tsx)$
-
-      - id: ruff-format
-        name: Format Python with Ruff
-        entry: python -m ruff format
-        language: system
-        files: \.py$
-
-      - id: ruff-check
-        name: Lint Python with Ruff
-        entry: python -m ruff check
-        language: system
-        files: \.py$
-
-      - id: gitleaks
-        name: Scan staged changes for secrets
-        entry: gitleaks protect --staged --redact
+      - id: quality-commit
+        name: Project quality (commit)
+        entry: .venv/bin/python .quality/run.py commit
         language: system
         pass_filenames: false
-
-      # Full checks run before each push.
-
-      - id: project-check
-        name: Run JS/TS formatting, linting, types, and tests
-        entry: npm run check
+        always_run: true
+        stages: [pre-commit]
+      - id: quality-push
+        name: Project quality (push)
+        entry: .venv/bin/python .quality/run.py push
         language: system
         pass_filenames: false
+        always_run: true
         stages: [pre-push]
-
-      - id: python-check
-        name: Run Python formatting, linting, types, and tests
-        entry: python scripts/verify_python.py
+      - id: repository-tests
+        name: Standards repository tests and Python checks
+        entry: .venv/bin/python scripts/verify_python.py
         language: system
         pass_filenames: false
+        always_run: true
         stages: [pre-push]
-
       - id: dependency-audit
-        name: Scan Python dependencies for vulnerabilities
-        entry: python -m pip_audit
+        name: Audit standards repository tool dependencies (manual)
+        entry: .venv/bin/python -m pip_audit -r .quality/locked/requirements.txt
         language: system
         pass_filenames: false
-        stages: [pre-push]
-
-      - id: semgrep
-        name: Run Semgrep security scan
-        entry: semgrep scan --config auto
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-
-      - id: trivy
-        name: Run Trivy dependency, secret, and configuration scan
-        entry: trivy fs --scanners vuln,secret,misconfig .
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-
-      - id: docker-compose-validate
-        name: Validate Docker Compose configuration when present
-        entry: python scripts/verify_docker_compose.py
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
+        always_run: true
+        stages: [manual]

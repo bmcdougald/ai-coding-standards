@@ -6,14 +6,16 @@ import sys
 
 def run(*command: str) -> None:
     print(f"\n$ {' '.join(command)}")
-    subprocess.run(command, check=True)
+    subprocess.run(  # noqa: S603 -- selected Python interpreter and fixed module argv
+        command, check=True
+    )
 
 
 def main() -> int:
     try:
         run(sys.executable, "-m", "ruff", "format", "--check", ".")
         run(sys.executable, "-m", "ruff", "check", ".")
-        run(sys.executable, "-m", "pyright")
+        run(sys.executable, "-m", "pyright", "--pythonpath", sys.executable)
         run(sys.executable, "-m", "pytest")
     except subprocess.CalledProcessError as error:
         return error.returncode

@@ -21,6 +21,14 @@
 - Do not pass untrusted input to shell commands.
 - Do not add dependencies unless necessary. Explain every new dependency.
 
+## Development Policies
+
+- Do not work on master/main directly unless specifically told to do so.
+- Use feature branches for repository changes or new development.
+- Naming for feature branches should follow the standard naming convention of branch work type (feature, bugfix, docs, tests, etc) followed by a forward slash and descriptive branch name (for example, feature/new-feature-shortname).
+- Creating and publishing new branches that don't have work yet should not trigger pre-commit or pre-push because the branch is clean with previously scanned code.
+- Check for existing functionality first before creating something new to avoid duplication or redundant code/architecture.
+
 ## Required validation
 
 Before reporting work complete, run:
@@ -85,3 +93,23 @@ Checks not run:
 Notes or known limitations:
 
 - ...
+
+## Project-local quality suite
+
+All rules above remain applicable. Use the following local commands for this profile:
+
+- `.venv/bin/python .quality/run.py check`: formatting, lint, types, schemas, Docker.
+- `.venv/bin/python .quality/run.py security`: Gitleaks, Semgrep, Trivy.
+- `.venv/bin/python .quality/run.py commit`: fast checks and staged secret scanning.
+- `.venv/bin/python .quality/run.py push`: full checks and security scanning.
+
+Python/mixed repositories use `.venv/bin/pre-commit`; Node-only repositories use Husky instead. For Node-only repositories, the commit/push commands above replace the two pre-commit framework validation commands; do not add a second hook manager.
+Use `.tools/bin/trivy` instead of a globally installed Trivy. The security command applies project exclusions and configured severity thresholds.
+Docker runtime checks stay configured. Missing Docker CLI, Compose plugin, or accessible daemon is an explicit dependency skip, not a successful validation. Invalid configurations and failed builds/scans must fail. Do not install Docker or change build targets without approval.
+See [setup and usage](QUALITY.md) for tool responsibilities and commands.
+
+## Existing-tool integration
+
+The hook manager recorded in `.quality/config.json` is authoritative. Amended projects may retain an existing pre-commit, Husky, or shell-hook setup instead of the profile default. Do not install a second active hook manager.
+For a recorded manager other than pre-commit, the commit/push commands above are the required equivalents of the two original pre-commit validation commands.
+Amendment retains existing analyzer rules and tests; replacement standardizes recognized scanning configuration, not application metadata or tests. Keep the configuration/hook backups until the migration has been validated.

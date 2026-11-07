@@ -1,0 +1,8 @@
+{
+  "checks": [
+    {
+      "schema": ".quality/extensions.schema.json",
+      "files": [".vscode/extensions.json"]
+    }
+  ]
+}

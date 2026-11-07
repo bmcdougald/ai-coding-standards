@@ -1,0 +1,6 @@
+.quality/
+.venv/
+.tools/
+node_modules/
+dist/
+build/

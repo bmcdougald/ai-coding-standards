@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 COMPOSE_FILES = (
@@ -16,7 +17,10 @@ def main() -> int:
         print("No Docker Compose file found; skipping Compose validation.")
         return 0
 
-    result = subprocess.run(["docker", "compose", "config"], check=False)
+    result = subprocess.run(  # noqa: S603 -- selected interpreter and fixed local runner argv
+        [sys.executable, str(Path(__file__).resolve().parents[1] / ".quality/run.py"), "docker"],
+        check=False,
+    )
     return result.returncode
 
 

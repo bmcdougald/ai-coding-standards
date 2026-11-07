@@ -1,0 +1,1 @@
+export PATH="$(git rev-parse --show-toplevel)/.venv/bin:$(git rev-parse --show-toplevel)/node_modules/.bin:$(git rev-parse --show-toplevel)/.tools/bin:$PATH"

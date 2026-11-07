@@ -3,7 +3,10 @@ line-length = 100
 target-version = "py311"
 exclude = [
   ".git",
+  ".quality",
+  ".tools",
   ".venv",
+  "node_modules",
   "__pycache__",
   "build",
   "dist"
@@ -25,9 +28,8 @@ select = [
 
 [tool.pyright]
 typeCheckingMode = "standard"
-include = ["src", "tests"]
-exclude = [".venv", "build", "dist"]
+include = ["."]
+exclude = [".venv", ".quality", ".tools", "node_modules", "build", "dist"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]

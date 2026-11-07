@@ -1,5 +1,13 @@
 # Development Code Quality Configuration Guide
 
+> **Automated setup:** Use the [bootstrap quickstart](../README.md) and
+> [setup/usage reference](../templates/quality/USAGE.md) for new repositories.
+> That workflow installs scanners under project-local `.tools`, uses Husky for
+> Node-only projects and pre-commit for Python/mixed projects, preserves VS Code
+> settings, and explicitly skips unavailable Docker runtime dependencies.
+> The manual examples below predate that workflow: their host scanner installs
+> and shared pre-commit environment for Node-only projects are not bootstrap requirements.
+
 ## 1. Purpose and Scope
 
 This guide defines a free, local-first quality and security baseline for repositories that use one or more of the following:
@@ -592,22 +600,26 @@ package-lock.json
 
 ### 7.4 Create `eslint.config.js`
 
+> Legacy example: these original React/accessibility plugins do not support
+> ESLint 10. For new projects, use the bootstrapper's supported ESLint 10
+> configuration and reviewed replacement plugins instead of copying this snippet.
+
 ```javascript
-import js from "@eslint/js";
-import globals from "globals";
-import tseslint from "typescript-eslint";
-import reactHooks from "eslint-plugin-react-hooks";
-import reactRefresh from "eslint-plugin-react-refresh";
-import jsxA11y from "eslint-plugin-jsx-a11y";
+import js from '@eslint/js';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
+import reactHooks from 'eslint-plugin-react-hooks';
+import reactRefresh from 'eslint-plugin-react-refresh';
+import jsxA11y from 'eslint-plugin-jsx-a11y';
 
 export default tseslint.config(
   {
-    ignores: [".venv", "node_modules", "dist", "build", "coverage"],
+    ignores: ['.venv', 'node_modules', 'dist', 'build', 'coverage'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["**/*.{js,mjs,cjs,ts,tsx}"],
+    files: ['**/*.{js,mjs,cjs,ts,tsx}'],
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -617,17 +629,14 @@ export default tseslint.config(
   },
   jsxA11y.flatConfigs.recommended,
   {
-    files: ["**/*.{jsx,tsx}"],
+    files: ['**/*.{jsx,tsx}'],
     plugins: {
-      "react-hooks": reactHooks,
-      "react-refresh": reactRefresh,
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      "react-refresh/only-export-components": [
-        "warn",
-        { allowConstantExport: true },
-      ],
+      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },
 );

@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "preserve",
+    "skipLibCheck": true
+  },
+  "include": ["tests/**/*.mjs"],
+  "exclude": ["node_modules", ".venv", ".tools", ".quality", "dist", "build", "vendor"]
+}

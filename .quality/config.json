@@ -1,0 +1,151 @@
+{
+  "python": {
+    "pip": "26.3",
+    "semgrep": "1.184.0",
+    "check-jsonschema": "0.38.0",
+    "ruff": "0.17.4",
+    "pyright": "1.1.414",
+    "pre-commit": "4.7.0"
+  },
+  "node": {
+    "eslint": "10.14.0",
+    "@eslint/js": "10.0.1",
+    "globals": "17.14.0",
+    "prettier": "3.9.10",
+    "typescript": "5.9.3",
+    "@types/node": "22.19.15",
+    "typescript-eslint": "8.72.1",
+    "@eslint-react/eslint-plugin": "5.28.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-jsx-a11y-x": "0.2.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "husky": "9.1.7"
+  },
+  "binaries": {
+    "gitleaks": {
+      "repository": "gitleaks/gitleaks",
+      "version": "8.30.1",
+      "assets": {
+        "Linux-x86_64": [
+          "gitleaks_8.30.1_linux_x64.tar.gz",
+          "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        ],
+        "Linux-arm64": [
+          "gitleaks_8.30.1_linux_arm64.tar.gz",
+          "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
+        ],
+        "Darwin-x86_64": [
+          "gitleaks_8.30.1_darwin_x64.tar.gz",
+          "dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709"
+        ],
+        "Darwin-arm64": [
+          "gitleaks_8.30.1_darwin_arm64.tar.gz",
+          "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5"
+        ]
+      }
+    },
+    "trivy": {
+      "repository": "aquasecurity/trivy",
+      "version": "0.76.2",
+      "assets": {
+        "Linux-x86_64": [
+          "trivy_0.76.2_Linux-64bit.tar.gz",
+          "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+        ],
+        "Linux-arm64": [
+          "trivy_0.76.2_Linux-ARM64.tar.gz",
+          "ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3"
+        ],
+        "Darwin-x86_64": [
+          "trivy_0.76.2_macOS-64bit.tar.gz",
+          "e08bb9ea449ecf66c6bfb03cbb8697c503ff33d35fc585c9747e3eaeb7ed4c7b"
+        ],
+        "Darwin-arm64": [
+          "trivy_0.76.2_macOS-ARM64.tar.gz",
+          "ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8"
+        ]
+      }
+    },
+    "hadolint": {
+      "repository": "hadolint/hadolint",
+      "version": "2.15.1",
+      "assets": {
+        "Linux-x86_64": [
+          "hadolint-linux-x86_64",
+          "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507"
+        ],
+        "Linux-arm64": [
+          "hadolint-linux-arm64",
+          "f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d"
+        ],
+        "Darwin-x86_64": [
+          "hadolint-macos-x86_64",
+          "ffe9bb18b23d5ed1eae50237aecdbb523d016e96da0bd4e7aa432040acfc3fde"
+        ],
+        "Darwin-arm64": [
+          "hadolint-macos-arm64",
+          "5c09f3213f8e40406abe048233d985eebef336d4a6a20021be47fadb6cf480a2"
+        ]
+      }
+    }
+  },
+  "languages": ["javascript", "python"],
+  "semgrep_config": "p/security-audit",
+  "severity": ["HIGH", "CRITICAL"],
+  "docker": {
+    "builds": [],
+    "images": []
+  },
+  "hook_manager": "pre-commit",
+  "tooling_policy": "replace",
+  "node_projects": ["."],
+  "python_projects": ["."],
+  "typescript_configs": ["tsconfig.json"],
+  "managed_tooling": [
+    ".gitignore",
+    ".gitleaks.toml",
+    ".pre-commit-config.yaml",
+    ".prettierignore",
+    ".prettierrc.json",
+    ".quality/config.json",
+    ".quality/env.sh",
+    ".quality/extensions.schema.json",
+    ".quality/install.py",
+    ".quality/jsonc.py",
+    ".quality/requirements.in",
+    ".quality/run.py",
+    ".quality/schemas.json",
+    ".semgrepignore",
+    ".vscode/extensions.json",
+    ".vscode/settings.json",
+    ".vscode/tasks.json",
+    "AGENTS.md",
+    "QUALITY.md",
+    "eslint.config.mjs",
+    "package.json",
+    "pyproject.toml",
+    "tsconfig.json"
+  ],
+  "scanner_configs": {
+    "gitleaks": [".gitleaks.toml"],
+    "trivy": [],
+    "hadolint": [],
+    "semgrep": [".semgrepignore"]
+  },
+  "runtime_api": 1,
+  "node_overrides": {
+    "eslint": {
+      "minimatch": "11.0.5"
+    },
+    "typescript-eslint": {
+      "minimatch": "11.0.5"
+    },
+    "@eslint-react/eslint-plugin": {
+      "minimatch": "11.0.5"
+    },
+    "eslint-plugin-jsx-a11y-x": {
+      "minimatch": "11.0.5"
+    }
+  }
+}

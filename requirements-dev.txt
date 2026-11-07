@@ -1,6 +1,9 @@
-ruff
-pyright
-pytest
-pip-audit
-pre-commit
-semgrep
+ruff==0.17.4
+pip==26.3
+pyright==1.1.414
+pytest==9.2.0
+pip-audit==2.10.1
+pre-commit==4.7.0
+semgrep==1.184.0
+check-jsonschema==0.38.0
+-r scripts/requirements-bootstrap.txt

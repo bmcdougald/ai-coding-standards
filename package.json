@@ -3,10 +3,46 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "typecheck": ".venv/bin/python .quality/run.py types",
+    "test": ".venv/bin/python -m pytest",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
-    "security": "gitleaks detect --source . --no-git --redact && semgrep scan --config auto && trivy fs --scanners vuln,secret,misconfig .",
-    "verify": "npm run check && npm run security"
+    "security": ".venv/bin/python .quality/run.py security",
+    "tooling:audit:python": ".venv/bin/python -m pip_audit -r .quality/locked/requirements.txt",
+    "tooling:audit:node": "npm audit",
+    "verify": "npm run check && npm run security",
+    "quality": ".venv/bin/python .quality/run.py check",
+    "quality:format": ".venv/bin/python .quality/run.py format",
+    "quality:types": ".venv/bin/python .quality/run.py types",
+    "quality:security": ".venv/bin/python .quality/run.py security",
+    "quality:docker": ".venv/bin/python .quality/run.py docker"
+  },
+  "private": true,
+  "overrides": {
+    "eslint": {
+      "minimatch": "11.0.5"
+    },
+    "typescript-eslint": {
+      "minimatch": "11.0.5"
+    },
+    "@eslint-react/eslint-plugin": {
+      "minimatch": "11.0.5"
+    },
+    "eslint-plugin-jsx-a11y-x": {
+      "minimatch": "11.0.5"
+    }
+  },
+  "devDependencies": {
+    "eslint": "10.14.0",
+    "@eslint/js": "10.0.1",
+    "globals": "17.14.0",
+    "prettier": "3.9.10",
+    "typescript": "5.9.3",
+    "@types/node": "22.19.15",
+    "typescript-eslint": "8.72.1",
+    "@eslint-react/eslint-plugin": "5.28.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-jsx-a11y-x": "0.2.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
   }
 }

@@ -1,5 +1,6 @@
 # Node
 node_modules/
+.tools/
 dist/
 build/
 coverage/
@@ -30,3 +31,5 @@ Thumbs.db
 gitleaks-report.json
 trivy-report.json
 semgrep-report.json
+!.vscode/
+!.vscode/tasks.json
