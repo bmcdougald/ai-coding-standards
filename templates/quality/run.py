@@ -51,6 +51,32 @@ def source_files() -> list[Path]:
     return files
 
 
+def push_base() -> str | None:
+    # pre-commit sets PRE_COMMIT_FROM_REF for pre-push hooks; BASE_REF is a manual
+    # override. Neither is set in CI, which runs discrete full-scope actions instead.
+    base = os.environ.get("PRE_COMMIT_FROM_REF") or os.environ.get("BASE_REF")
+    # Refs cannot start with a dash; anything else is flag injection into scanners.
+    if not base or base.startswith("-"):
+        return None
+    return base
+
+
+def changed_files(base: str) -> list[Path] | None:
+    git = shutil.which("git")
+    if git is None:
+        return None
+    result = subprocess.run(  # noqa: S603 -- resolved Git executable and fixed diff arguments
+        [git, "diff", "--name-only", "-z", "--diff-filter=ACMR", base, "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
+    )
+    if result.returncode:
+        return None
+    return [ROOT / name for name in result.stdout.split("\0") if name and (ROOT / name).is_file()]
+
+
 def run(*command: str, directory: Path = ROOT, environment: dict[str, str] | None = None) -> None:
     executable = command[0]
     resolved = shutil.which(executable)
@@ -207,6 +233,9 @@ def main() -> int:
         for kind, names in config.get("scanner_configs", {}).items()
     }
     action = args.action
+    base = push_base() if action == "push" else None
+    changed = changed_files(base) if base else None
+    # An unresolvable or empty diff must scan the full tree, never report a false-clean.
     check = action in {"check", "push"}
     format_check = (
         action == "format-check"
@@ -350,10 +379,15 @@ def main() -> int:
     if action in {"commit", "security", "push", "secrets"}:
         configs = scanner_configs.get("gitleaks", [])
         root_configs = [path for path in configs if path.parent == ROOT]
+        if action == "commit":
+            gitleaks_mode = ("git", "--pre-commit", "--staged")
+        elif changed and base:
+            gitleaks_mode = ("git", "--log-opts=" + base + "..HEAD")
+        else:
+            gitleaks_mode = ("dir",)
         run(
             str(tools / "gitleaks"),
-            "git" if action == "commit" else "dir",
-            *(["--pre-commit", "--staged"] if action == "commit" else []),
+            *gitleaks_mode,
             "--redact",
             *(["--config", str(root_configs[0])] if root_configs else []),
             ".",
@@ -385,6 +419,11 @@ def main() -> int:
                     directory=path.parent,
                 )
     if action in {"security", "push", "sast"}:
+        if changed and base:
+            targets = [path.relative_to(ROOT).as_posix() for path in changed]
+            baseline = ["--baseline-commit", base]
+        else:
+            targets, baseline = ["."], []
         run(
             str(ROOT / ".tools/venv/bin/semgrep"),
             "scan",
@@ -394,7 +433,8 @@ def main() -> int:
             "off",
             "--disable-version-check",
             "--error",
-            ".",
+            *baseline,
+            *targets,
         )
         for path in scanner_configs.get("semgrep", []):
             if path.name != ".semgrepignore":
@@ -422,40 +462,48 @@ def main() -> int:
                     str(path),
                 )
             ]
-            run(
-                str(tools / "trivy"),
-                "fs",
-                "--cache-dir",
-                str(ROOT / ".tools/cache/trivy"),
-                "--scanners",
-                "vuln,secret,misconfig",
-                "--exit-code",
-                "1",
-                "--severity",
-                ",".join(config["severity"]),
-                "--skip-dirs",
-                ".venv",
-                "--skip-dirs",
-                ".tools",
-                "--skip-dirs",
-                ".quality",
-                "--skip-dirs",
-                "node_modules",
-                "--skip-files",
-                "**/package-lock.json",
-                "--skip-files",
-                "**/npm-shrinkwrap.json",
-                "--skip-files",
-                "**/package.json",
-                *(
-                    ["--skip-db-update", "--skip-java-db-update", "--offline-scan"]
-                    if args.offline
-                    else []
-                ),
-                *options,
-                ".",
-                directory=scope,
-            )
+            if changed:
+                scoped_files = [path for path in changed if path.is_relative_to(scope)]
+                if not scoped_files:
+                    continue
+                targets = sorted({path.relative_to(scope).parts[0] for path in scoped_files})
+            else:
+                targets = ["."]
+            for target in targets:
+                run(
+                    str(tools / "trivy"),
+                    "fs",
+                    "--cache-dir",
+                    str(ROOT / ".tools/cache/trivy"),
+                    "--scanners",
+                    "vuln,secret,misconfig",
+                    "--exit-code",
+                    "1",
+                    "--severity",
+                    ",".join(config["severity"]),
+                    "--skip-dirs",
+                    ".venv",
+                    "--skip-dirs",
+                    ".tools",
+                    "--skip-dirs",
+                    ".quality",
+                    "--skip-dirs",
+                    "node_modules",
+                    "--skip-files",
+                    "**/package-lock.json",
+                    "--skip-files",
+                    "**/npm-shrinkwrap.json",
+                    "--skip-files",
+                    "**/package.json",
+                    *(
+                        ["--skip-db-update", "--skip-java-db-update", "--offline-scan"]
+                        if args.offline
+                        else []
+                    ),
+                    *options,
+                    target,
+                    directory=scope,
+                )
     if action in {"security", "push"}:
         scan_receipt(ROOT, config, args.offline)
     if action == "docker" or check:

@@ -252,16 +252,62 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 installed.update([directory, *workspaces])
         if not (args.update_tools or args.restore_tools):
-            run(
-                str(ROOT / "node_modules/.bin/prettier"),
-                "--write",
+            formattable = {
+                ".js",
+                ".mjs",
+                ".cjs",
+                ".ts",
+                ".mts",
+                ".cts",
+                ".json",
+                ".md",
+                ".yaml",
+                ".yml",
+            }
+            generated = {
+                ".pre-commit-config.yaml",
+                ".pre-commit-config.yml",
+                ".prettierrc.json",
+                "eslint.config.mjs",
+                "tsconfig.json",
+                "package.json",
+                ".gitlab-ci.yml",
+                ".github/workflows/quality.yml",
+                ".quality/ci.json",
                 ".quality/config.json",
                 ".quality/extensions.schema.json",
                 ".quality/schemas.json",
                 ".vscode/settings.json",
                 ".vscode/extensions.json",
                 ".vscode/tasks.json",
-                *([".quality/ci.json"] if (ROOT / ".quality/ci.json").exists() else []),
+                "AGENTS.md",
+                "QUALITY.md",
+            }
+            for project in config.get("node_projects", ["."]):
+                generated.update(
+                    str(Path(project) / name)
+                    for name in (
+                        "package.json",
+                        "tsconfig.json",
+                        "eslint.config.mjs",
+                        ".prettierrc.json",
+                    )
+                )
+            generated.update(
+                path.relative_to(ROOT).as_posix()
+                for pattern in ("*.yaml", "*.yml")
+                for path in (ROOT / ".quality/ci-adapters").glob(pattern)
+            )
+            # Round-tripped and merged managed files must satisfy the format check.
+            generated.update(
+                name
+                for name in config.get("managed_tooling", [])
+                if Path(name).suffix in formattable
+            )
+            run(
+                str(ROOT / "node_modules/.bin/prettier"),
+                "--write",
+                *sorted(name for name in generated if (ROOT / name).is_file()),
             )
     for name, spec in config["binaries"].items():
         install_binary(name, spec, system)

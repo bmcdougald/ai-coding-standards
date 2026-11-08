@@ -1276,9 +1276,9 @@ def scaffold(
         '$(git rev-parse --show-toplevel)/.tools/bin:$PATH"\n',
     )
     requirements = [
-        "pip==" + manifest["python"]["pip"],
-        "semgrep==" + manifest["python"]["semgrep"],
-        "check-jsonschema==" + manifest["python"]["check-jsonschema"],
+        name + "==" + version
+        for name, version in manifest["python"].items()
+        if name not in {"ruff", "pyright", "pre-commit"}
     ]
     if python:
         requirements.extend(name + "==" + manifest["python"][name] for name in ("ruff", "pyright"))
@@ -1436,7 +1436,8 @@ def scaffold(
             )
         eslint.append("export default [")
         eslint.append(
-            '  { ignores: [".venv/**", ".tools/**", "node_modules/**", "dist/**", "build/**"] },'
+            '  { ignores: [".venv/**", ".tools/**", "node_modules/**", '
+            '"dist/**", "build/**", "coverage/**"] },'
         )
         eslint.append('  { files: ["**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}"], extends: [')
         eslint.append("    " + ", ".join(configs) + "],")
