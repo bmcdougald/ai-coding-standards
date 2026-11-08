@@ -164,6 +164,7 @@ def discover(target: Path) -> dict[str, Any]:
             continue
         pyproject = directory / "pyproject.toml"
         project = tomllib.loads(pyproject.read_text()) if pyproject in paths else {}
+        unittest = all("unittest" in path.read_text() for path in tests)
         pytest = (
             (directory / "pytest.ini") in paths
             or "pytest" in project.get("tool", {})
@@ -171,14 +172,9 @@ def discover(target: Path) -> dict[str, Any]:
                 "import pytest" in path.read_text() or "from pytest import" in path.read_text()
                 for path in tests
             )
+            # pytest-style test filenames are sufficient framework evidence on their own.
+            or not unittest
         )
-        unittest = all("unittest" in path.read_text() for path in tests)
-        if not pytest and not unittest:
-            print(
-                "CI: test framework is ambiguous in " + str(directory) + "; add commands manually.",
-                file=sys.stderr,
-            )
-            continue
         command(
             "setup",
             "Create application Python environment",

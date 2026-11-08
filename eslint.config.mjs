@@ -2,7 +2,9 @@ import { defineConfig } from 'eslint/config';
 import js from '@eslint/js';
 import globals from 'globals';
 export default defineConfig([
-  { ignores: ['.venv/**', '.tools/**', 'node_modules/**', 'dist/**', 'build/**'] },
+  {
+    ignores: ['.venv/**', '.tools/**', 'node_modules/**', 'dist/**', 'build/**', 'coverage/**'],
+  },
   {
     files: ['**/*.{js,mjs,cjs,jsx,ts,tsx,mts,cts}'],
     extends: [js.configs.recommended],

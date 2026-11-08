@@ -89,6 +89,10 @@ def execute(entry: dict, timeout: int) -> bool:
         for arg in entry["argv"]
     ]
     environment = os.environ.copy()
+    # run.py diff-scopes push scans on these local hook variables; CI always scans
+    # the full tree, so they must not leak through the inherited environment.
+    for variable in ("PRE_COMMIT_FROM_REF", "PRE_COMMIT_TO_REF", "BASE_REF"):
+        environment.pop(variable, None)
     environment["CI"] = "true"
     environment["QUALITY_UPDATE_CHECK"] = "1"
     environment["QUALITY_CI_REPORT"] = REPORT

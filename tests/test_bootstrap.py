@@ -1436,6 +1436,67 @@ class ToolingPolicyTests(unittest.TestCase):
                             )
                         )
 
+    def test_push_scopes_scanners_to_the_pushed_diff(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.repository(root)
+            self.reconcile(root, {"python"}, "amend")
+            (root / ".tools").mkdir()
+            self.write(root, "frontend/app.py", "value = 1\n")
+            self.write(root, "backend/service.py", "value = 2\n")
+
+            def git_diff(command: list[str], **kwargs) -> subprocess.CompletedProcess:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="frontend/app.py\0backend/service.py\0",
+                    stderr="",
+                )
+
+            with (
+                patch.object(runner, "ROOT", root),
+                patch.object(runner, "run") as run,
+                patch.object(runner, "scan_receipt"),
+                patch.object(runner.subprocess, "run", side_effect=git_diff),
+                patch.dict(runner.os.environ, {"PRE_COMMIT_FROM_REF": "origin/main"}),
+                patch.object(runner.sys, "argv", ["run.py", "push"]),
+            ):
+                self.assertEqual(runner.main(), 0)
+            calls = [call.args for call in run.call_args_list]
+            gitleaks = next(call for call in calls if call[0].endswith("gitleaks"))
+            self.assertIn("git", gitleaks)
+            self.assertIn("--log-opts=origin/main..HEAD", gitleaks)
+            semgrep = next(call for call in calls if call[0].endswith("semgrep"))
+            self.assertIn("--baseline-commit", semgrep)
+            self.assertIn("origin/main", semgrep)
+            self.assertEqual(list(semgrep[-2:]), ["frontend/app.py", "backend/service.py"])
+            trivy = [call for call in calls if call[0].endswith("trivy")]
+            self.assertEqual(sorted(call[-1] for call in trivy), ["backend", "frontend"])
+
+    def test_push_without_a_diff_base_scans_the_full_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.repository(root)
+            self.reconcile(root, {"python"}, "amend")
+            (root / ".tools").mkdir()
+            with (
+                patch.object(runner, "ROOT", root),
+                patch.object(runner, "run") as run,
+                patch.object(runner, "scan_receipt"),
+                patch.dict(runner.os.environ, {"PRE_COMMIT_FROM_REF": "", "BASE_REF": ""}),
+                patch.object(runner.sys, "argv", ["run.py", "push"]),
+            ):
+                self.assertEqual(runner.main(), 0)
+            calls = [call.args for call in run.call_args_list]
+            gitleaks = next(call for call in calls if call[0].endswith("gitleaks"))
+            self.assertIn("dir", gitleaks)
+            semgrep = next(call for call in calls if call[0].endswith("semgrep"))
+            self.assertNotIn("--baseline-commit", semgrep)
+            self.assertEqual(semgrep[-1], ".")
+            trivy = [call for call in calls if call[0].endswith("trivy")]
+            self.assertEqual(len(trivy), 1)
+            self.assertEqual(trivy[0][-1], ".")
+
 
 class BootstrapTests(unittest.TestCase):
     repository = DetectionTests.repository

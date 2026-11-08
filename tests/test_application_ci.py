@@ -166,15 +166,19 @@ class ApplicationCITests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Invalid Python test/fixture"):
                 configuration.discover(root)
 
-    def test_unittest_and_ambiguous_frameworks(self):
+    def test_unittest_and_pytest_convention_frameworks(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "test_app.py").write_text("import unittest\n")
             self.assertIn("unittest", configuration.discover(root)["tests"][0]["argv"])
             (root / "test_app.py").write_text("def test_app(): pass\n")
             with contextlib.redirect_stderr(io.StringIO()) as warnings:
-                self.assertEqual(configuration.discover(root)["tests"], [])
-            self.assertIn("ambiguous", warnings.getvalue())
+                discovered = configuration.discover(root)["tests"]
+            self.assertEqual(
+                discovered,
+                [{"name": "pytest", "cwd": ".", "argv": ["{python}", "-m", "pytest"]}],
+            )
+            self.assertNotIn("ambiguous", warnings.getvalue())
 
     def test_noninteractive_commands_require_review_and_preview_is_parseable(self):
         with tempfile.TemporaryDirectory() as temp:

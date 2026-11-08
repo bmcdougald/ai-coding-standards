@@ -206,7 +206,9 @@ JavaScript type checking is strict: add JSDoc types when needed.
 Python-only projects do not install Node/Prettier; their Python formatter is Ruff.
 
 Commit hooks format/lint, validate schemas, lint Dockerfiles and check staged
-secrets. Push hooks perform the full checks and security scans. Checks fail when
+secrets. Push hooks perform the full checks and security scans diff-scoped to the
+pushed range, falling back to the full tree when no diff base is set (as in CI).
+Checks fail when
 required non-Docker tools are missing; reinstall tools rather than bypass hooks.
 No application test framework is imposed: wire your project's test command
 separately once its framework is selected.
