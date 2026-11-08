@@ -8,7 +8,7 @@
 - Add or update tests when behavior changes.
 - Do not weaken tests, lint rules, type checks, security scans, or Git hooks to make checks pass.
 - Do not disable, skip, delete, or bypass pre-commit hooks.
-- Do not use `git commit --no-verify` or `git push --no-verify`.
+- Do not use `git commit --no-verify` or `git push --no-verify` for pushes/commits to main/master. You may use the --no-verify if asked to do so by the user on feature branches.
 - Do not claim a check passed unless it was run and its result was reviewed.
 
 ## Security rules
