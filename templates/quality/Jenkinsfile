@@ -1,21 +1,66 @@
 pipeline {
-    agent { label 'linux' }
+    agent none
     options {
         timestamps()
         disableConcurrentBuilds()
     }
     stages {
-        stage('Application quality, security and tests') {
+        stage('Parallel application checks') {
             steps {
-                sh 'python3 .quality/ci.py all'
-            }
-        }
-    }
-    post {
-        always {
-            script {
-                if (fileExists('.tools/ci/status.txt')) {
-                    currentBuild.description = readFile('.tools/ci/status.txt').trim()
+                script {
+                    def names = [
+                        'format-check': 'Formatting',
+                        lint: 'Linting',
+                        types: 'Type checks',
+                        schemas: 'Schema validation',
+                        docker: 'Docker checks',
+                        secrets: 'Secret detection',
+                        sast: 'SAST',
+                        dependencies: 'Dependency vulnerabilities',
+                        filesystem: 'Filesystem security',
+                        general: 'Unit and integration tests',
+                        browser: 'Playwright tests'
+                    ]
+                    def results = [:]
+                    def branches = [:]
+                    names.each { action, displayName ->
+                        def jobAction = action
+                        def jobName = displayName
+                        branches[jobName] = {
+                            try {
+                                node('linux') {
+                                    ws("${env.WORKSPACE}@quality-${jobAction}") {
+                                        checkout scm
+                                        def exitCode = sh(
+                                            script: "python3 .quality/ci.py job '${jobAction}'",
+                                            returnStatus: true
+                                        )
+                                        def status = exitCode == 0 && fileExists('.tools/ci/job-status.txt') ?
+                                            readFile('.tools/ci/job-status.txt').trim() : 'FAILED'
+                                        results[jobAction] = status in ['PASSED', 'SKIPPED'] ? status : 'FAILED'
+                                    }
+                                }
+                            } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException interrupted) {
+                                throw interrupted
+                            } catch (Exception failure) {
+                                echo "${jobName} failed: ${failure}"
+                                results[jobAction] = 'FAILED'
+                            }
+                        }
+                    }
+                    parallel branches
+                    def lines = ['## Application CI results', '', '| Check | Result |', '|---|---|']
+                    names.each { action, name ->
+                        lines.add("| ${name} | ${results[action] ?: 'FAILED'} |")
+                    }
+                    echo lines.join('\n')
+                    def counts = ['PASSED', 'FAILED', 'SKIPPED'].collect { state ->
+                        "${names.keySet().count { (results[it] ?: 'FAILED') == state }} ${state.toLowerCase()}"
+                    }
+                    currentBuild.description = counts.join('; ')
+                    if (names.keySet().any { (results[it] ?: 'FAILED') == 'FAILED' }) {
+                        error('One or more application CI jobs failed.')
+                    }
                 }
             }
         }

@@ -42,6 +42,8 @@ an explicitly reviewed replacement is supplied. Changed CI files are backed up.
 Existing different native pipelines are **never overwritten**, even with
 `--existing-tools replace`: integrate the generated `.quality/ci-adapters/`
 snippets manually. This also applies to upgrading an earlier `--ci` workflow.
+Existing test workflows are also retained; review them for overlapping test
+runs and consolidate them yourself only after verifying equivalent coverage.
 The CI runner is owned/fingerprinted and participates in `--update-tooling`;
 application commands and customized pipelines remain application-owned.
 
@@ -58,9 +60,11 @@ Python Playwright is also detected from `playwright`/`pytest-playwright` in the
 selected requirements or installed package dependencies/extras, or Playwright
 imports in tests and `conftest.py`. Discovery proposes
 `{python} -m playwright install --with-deps` after application dependency setup.
-The existing pytest command includes pytest-based browser tests; no duplicate
-e2e invocation is added. Review pytest collection settings and add separate
-commands if your configuration excludes e2e tests from the default run.
+Where Playwright and both browser tests in `tests/e2e` and other pytest tests
+are detected, discovery proposes `pytest --ignore tests/e2e` and a separate
+`pytest tests/e2e` command. Review pytest collection settings, markers and custom
+paths to ensure this split covers the intended tests without duplication.
+When a safe split is not identified, the existing pytest command remains intact.
 Select required browsers in the reviewed argv (for example, append `chromium`);
 otherwise Playwright installs its default browsers. Imports alone do not install
 the Python package: ensure your application dependency setup includes it.
@@ -72,6 +76,10 @@ Review aggregate/workspace scripts to avoid running the same suite twice, and
 replace watch-mode commands with CI variants. Discovery cannot infer databases,
 service containers, credentials, native builds, private registries, Python
 dependency groups or arbitrary test harnesses. Add these explicitly.
+Optional test command `"suite": "general"` or `"suite": "browser"` selects its
+parallel job; omitted values default to `general` for compatibility. Classify
+only commands you have verified, and avoid putting an aggregate command that
+already includes browser tests alongside a separate browser command.
 Tests already run by custom hooks must be represented here or in the application's
 existing pipeline; untracked Git hooks are not recreated or assumed present on CI.
 
@@ -149,7 +157,13 @@ CI does not guess Docker build arguments or deploy images.
 
 No result artifacts are uploaded. GitHub displays an inline job summary table;
 GitLab prints the table in its job log; Jenkins displays build counts/console
-results. The table shows passed/failed/skipped checks and test-command outcomes;
+results. GitHub and Jenkins run independent check and reviewed test-category jobs
+in parallel, each with isolated workspace and tool restoration. Their combined
+summary reports each job's passed/failed/skipped status; each job log has details.
+GitHub uses job outputs, Jenkins uses in-memory pipeline results. GitLab deliberately
+uses one job so its combined summary needs neither artifacts nor an API token.
+Parallel jobs restore tools independently and may increase runner usage.
+The table shows passed/failed/skipped checks and test-command outcomes;
 individual assertions, vulnerability findings, and browser diagnostics remain in
 the job log, not an attached report. No tests configured is an explicit skip.
 Review test/log output for sensitive data and apply provider retention/access policies.
@@ -162,10 +176,11 @@ or enforce merge protection.
 
 ### GitHub Actions
 
-- The generated `.github/workflows/quality.yml` runs on branch pushes, PR updates
-  targeting `main`/`master`, and manual dispatch. Post-merge branch pushes run it again.
+- The generated `.github/workflows/quality.yml` runs on all branch pushes, PR updates,
+  and manual dispatch. Post-merge branch pushes run it again.
 - Enable Actions and review allowed actions/fork approvals.
-- Make the `quality` job required using branch rules/rulesets.
+- Make the `Full CI summary` job required using branch rules/rulesets. It fails
+  for failed, cancelled or missing job results.
 - If using a merge queue, add the provider's `merge_group` trigger.
 - Official actions are commit-pinned and checkout credentials are not persisted.
   Adjust runtime versions to the application's supported Python/Node versions.
@@ -187,6 +202,7 @@ or enforce merge protection.
 - Configure push webhooks, branch discovery, and PR discovery/target filters for
   `main`/`master`.
 - Provide an isolated `linux` agent with Git, Python/venv and supported Node/npm.
+- Provide enough executor capacity for parallel checks; each uses a separate workspace.
 - Configure SCM status reporting and required checks through your integration.
 
 ## 5. Validate before enforcing merges

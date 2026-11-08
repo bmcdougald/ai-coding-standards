@@ -66,10 +66,13 @@ def discover(target: Path) -> dict[str, Any]:
             Path(directory) / name for name in names if not (Path(directory) / name).is_symlink()
         )
 
-    def command(group: str, name: str, directory: Path, argv: list[str]) -> None:
-        config[group].append(
-            {"name": name, "cwd": directory.relative_to(target).as_posix(), "argv": argv}
-        )
+    def command(
+        group: str, name: str, directory: Path, argv: list[str], suite: str | None = None
+    ) -> None:
+        entry = {"name": name, "cwd": directory.relative_to(target).as_posix(), "argv": argv}
+        if suite is not None:
+            entry["suite"] = suite
+        config[group].append(entry)
 
     for manifest in sorted(path for path in paths if path.name == "package.json"):
         package = json.loads(manifest.read_text())
@@ -104,7 +107,12 @@ def discover(target: Path) -> dict[str, Any]:
                 or "no test specified" in script
             ):
                 continue
-            command("tests", "npm " + name, directory, ["npm", "run", name])
+            suite = (
+                "browser"
+                if name in {"test:e2e", "test:playwright"} and "playwright" in script
+                else None
+            )
+            command("tests", "npm " + name, directory, ["npm", "run", name], suite)
         playwright = any(
             path.parent == directory and path.name.startswith("playwright.config.")
             for path in paths
@@ -123,6 +131,7 @@ def discover(target: Path) -> dict[str, Any]:
                     "Playwright",
                     directory,
                     ["npm", "exec", "--no", "--", "playwright", "test"],
+                    "browser",
                 )
         if playwright and not selected:
             command("setup", "Rebuild application npm dependencies", directory, ["npm", "rebuild"])
@@ -243,7 +252,25 @@ def discover(target: Path) -> dict[str, Any]:
                     directory,
                     ["{python}", "-m", "playwright", "install", "--with-deps"],
                 )
-            command("tests", "pytest", directory, ["{python}", "-m", "pytest"])
+            browser_dir = directory / "tests/e2e"
+            browser_tests = [path for path in tests if path.is_relative_to(browser_dir)]
+            if playwright and browser_tests and len(browser_tests) < len(tests):
+                command(
+                    "tests",
+                    "Unit and integration tests",
+                    directory,
+                    ["{python}", "-m", "pytest", "--ignore", "tests/e2e"],
+                    "general",
+                )
+                command(
+                    "tests",
+                    "Playwright tests",
+                    directory,
+                    ["{python}", "-m", "pytest", "tests/e2e"],
+                    "browser",
+                )
+            else:
+                command("tests", "pytest", directory, ["{python}", "-m", "pytest"])
         else:
             start = "tests" if (directory / "tests").is_dir() else "."
             command(

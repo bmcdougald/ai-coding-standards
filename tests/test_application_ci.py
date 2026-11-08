@@ -234,7 +234,7 @@ class ApplicationCITests(unittest.TestCase):
             for destination, template in configuration.PROVIDERS.values():
                 self.assertEqual((root / destination).read_text(), "existing pipeline\n")
                 self.assertIn(
-                    "python3 .quality/ci.py all",
+                    "python3 .quality/ci.py",
                     (root / ".quality/ci-adapters" / template).read_text(),
                 )
             self.assertIn(
@@ -392,14 +392,175 @@ class ApplicationCITests(unittest.TestCase):
 
     def test_adapter_triggers_and_no_artifact_uploads(self):
         github = (ROOT / "templates/quality/github-quality.yml").read_text()
-        self.assertIn("branches: [main, master]", github)
+        self.assertIn("  pull_request:\n  push:\n", github)
         self.assertIn("persist-credentials: false", github)
         self.assertNotIn("pull_request_target", github)
+        self.assertIn("toJSON(needs)", github)
+        self.assertIn("python3 .quality/ci.py job", github)
+        self.assertIn("parallel branches", (ROOT / "templates/quality/Jenkinsfile").read_text())
         for _, template in configuration.PROVIDERS.values():
             content = (ROOT / "templates/quality" / template).read_text()
             self.assertNotIn("upload-artifact", content)
             self.assertNotIn("archiveArtifacts", content)
             self.assertNotIn("artifacts:", content)
+
+    def test_python_playwright_split_is_reviewed_and_covers_both_test_directories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tests/e2e").mkdir(parents=True)
+            (root / "pytest.ini").write_text("[pytest]\n")
+            (root / "requirements-dev.txt").write_text("pytest-playwright\n")
+            (root / "tests/test_unit.py").write_text("def test_unit(): pass\n")
+            (root / "tests/e2e/test_browser.py").write_text("def test_browser(page): pass\n")
+            config = configuration.discover(root)
+            self.assertEqual([entry["suite"] for entry in config["tests"]], ["general", "browser"])
+            self.assertEqual(config["tests"][0]["argv"][-2:], ["--ignore", "tests/e2e"])
+            self.assertEqual(config["tests"][1]["argv"][-1], "tests/e2e")
+            ci.validate_config(config, root)
+
+    def test_github_summary_fails_missing_jobs_and_preserves_skips(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            results = {
+                key: {"result": "success", "outputs": {"status": "PASSED"}} for key in ci.JOBS
+            }
+            results["browser"]["outputs"]["status"] = "SKIPPED"
+            del results["lint"]
+            output = root / "summary"
+            with (
+                patch.object(ci, "ROOT", root),
+                patch.dict(
+                    os.environ,
+                    {
+                        "QUALITY_JOB_RESULTS": json.dumps(results),
+                        "GITHUB_STEP_SUMMARY": str(output),
+                    },
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(ci.main(["github-summary"]), 1)
+            self.assertIn("| Linting | FAILED |", output.read_text())
+            self.assertIn("| Playwright tests | SKIPPED |", output.read_text())
+
+    def test_parallel_job_runs_only_selected_reviewed_test_suite(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / ".quality").mkdir()
+            (root / ".quality/ci.json").write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "setup": [],
+                        "tests": [
+                            {"name": "unit", "cwd": ".", "argv": ["true"], "suite": "general"},
+                            {"name": "browser", "cwd": ".", "argv": ["true"], "suite": "browser"},
+                        ],
+                    }
+                )
+            )
+            calls = []
+
+            def execute(entry, timeout):
+                calls.append(entry["name"])
+                ci.record(entry["name"], "PASSED", "")
+                return True
+
+            with (
+                patch.object(ci, "ROOT", root),
+                patch.object(ci, "execute", side_effect=execute),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(ci.main(["job", "browser"]), 0)
+            self.assertEqual(calls, ["Restore pinned scanner tools", "browser"])
+            self.assertEqual((root / ".tools/ci/job-status.txt").read_text().strip(), "PASSED")
+
+    def test_parallel_test_jobs_execute_real_commands_in_isolation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            quality = root / ".quality"
+            quality.mkdir()
+            for name in ("ci.py", "jsonc.py", "maintenance.py"):
+                shutil.copy2(ROOT / "templates/quality" / name, quality / name)
+            (quality / "install.py").write_text("print('fixture restore')\n")
+            (quality / "ci.json").write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "setup": [],
+                        "tests": [
+                            {
+                                "name": "unit",
+                                "cwd": ".",
+                                "suite": "general",
+                                "argv": [
+                                    sys.executable,
+                                    "-c",
+                                    "from pathlib import Path; Path('unit-ran').touch()",
+                                ],
+                            },
+                            {
+                                "name": "browser",
+                                "cwd": ".",
+                                "suite": "browser",
+                                "argv": [
+                                    sys.executable,
+                                    "-c",
+                                    "from pathlib import Path; Path('browser-ran').touch()",
+                                ],
+                            },
+                        ],
+                    }
+                )
+            )
+            result = subprocess.run(  # noqa: S603 -- fixed interpreter and fixture runner
+                [sys.executable, str(quality / "ci.py"), "job", "browser"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((root / "browser-ran").exists())
+            self.assertFalse((root / "unit-ran").exists())
+            self.assertIn("PASSED", (root / ".tools/ci/job-status.txt").read_text())
+
+    def test_parallel_test_job_failure_and_empty_suite_status(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / ".quality").mkdir()
+            config = {
+                "schema": 1,
+                "setup": [],
+                "tests": [{"name": "unit", "cwd": ".", "argv": ["false"], "suite": "general"}],
+            }
+            (root / ".quality/ci.json").write_text(json.dumps(config))
+
+            def execute(entry, timeout):
+                passed = entry["name"] != "unit"
+                ci.record(entry["name"], "PASSED" if passed else "FAILED", "")
+                return passed
+
+            with (
+                patch.object(ci, "ROOT", root),
+                patch.object(ci, "execute", side_effect=execute),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(ci.main(["job", "general"]), 1)
+                self.assertEqual((root / ".tools/ci/job-status.txt").read_text().strip(), "FAILED")
+                self.assertEqual(ci.main(["job", "browser"]), 0)
+                self.assertEqual((root / ".tools/ci/job-status.txt").read_text().strip(), "SKIPPED")
+
+    def test_github_workflow_has_independent_jobs_and_complete_summary_dependencies(self):
+        from ruamel.yaml import YAML
+
+        workflow = YAML(typ="safe").load(
+            (ROOT / "templates/quality/github-quality.yml").read_text()
+        )
+        jobs = workflow["jobs"]
+        self.assertEqual(set(jobs["summary"]["needs"]), set(ci.JOBS))
+        for job in ci.JOBS:
+            self.assertEqual(jobs[job]["outputs"]["status"], "${{ steps.result.outputs.status }}")
+            self.assertTrue(any("ci.py job" in step.get("run", "") for step in jobs[job]["steps"]))
 
     def test_standards_ci_restores_application_imports_and_migration_history(self):
         from ruamel.yaml import YAML
@@ -462,6 +623,30 @@ class ApplicationCITests(unittest.TestCase):
                             "name": "Docker checks",
                             "cwd": ".",
                             "argv": ["python3", ".quality/run.py", "docker"],
+                        },
+                        60,
+                    )
+                )
+            rows = [
+                json.loads(line)
+                for line in (root / ".tools/ci/checks.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(rows[-1]["status"], "SKIPPED")
+
+    def test_empty_quality_action_is_not_reported_as_passed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (
+                patch.object(ci, "ROOT", root),
+                patch.object(ci.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertTrue(
+                    ci.execute(
+                        {
+                            "name": "Schemas",
+                            "cwd": ".",
+                            "argv": ["python3", ".quality/run.py", "schemas"],
                         },
                         60,
                     )

@@ -14,6 +14,19 @@ from maintenance import checked_path, scan_receipt
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT = ".tools/ci/checks.jsonl"
+JOBS = {
+    "format": "Formatting",
+    "lint": "Linting",
+    "types": "Type checks",
+    "schemas": "Schema validation",
+    "docker": "Docker checks",
+    "secrets": "Secret detection",
+    "sast": "SAST",
+    "dependencies": "Dependency vulnerabilities",
+    "filesystem": "Filesystem security",
+    "general": "Unit and integration tests",
+    "browser": "Playwright tests",
+}
 
 
 def validate_config(config: dict, root: Path | None = None) -> None:
@@ -33,7 +46,16 @@ def validate_config(config: dict, root: Path | None = None) -> None:
         for entry in entries:
             if (
                 not isinstance(entry, dict)
-                or set(entry) != {"name", "cwd", "argv"}
+                or not {"name", "cwd", "argv"} <= entry.keys()
+                or set(entry) - {"name", "cwd", "argv", "suite"}
+                or (
+                    "suite" in entry
+                    and (
+                        group != "tests"
+                        or not isinstance(entry["suite"], str)
+                        or entry["suite"] not in {"general", "browser"}
+                    )
+                )
                 or not isinstance(entry["name"], str)
                 or not entry["name"].strip()
                 or "\n" in entry["name"]
@@ -95,17 +117,17 @@ def execute(entry: dict, timeout: int) -> bool:
         return False
     passed = result.returncode == 0
     status = "PASSED" if passed else "FAILED"
-    if passed and ".quality/run.py" in command and report.exists():
-        with report.open() as stream:
-            stream.seek(offset)
-            checks = [json.loads(line) for line in stream]
-        if checks and all(check["status"] == "SKIPPED" for check in checks):
+    detail = f"Exit {result.returncode}; {time.monotonic() - started:.1f}s"
+    if passed and ".quality/run.py" in command:
+        checks = []
+        if report.exists():
+            with report.open() as stream:
+                stream.seek(offset)
+                checks = [json.loads(line) for line in stream]
+        if not checks or all(check["status"] == "SKIPPED" for check in checks):
             status = "SKIPPED"
-    record(
-        entry["name"],
-        status,
-        f"Exit {result.returncode}; {time.monotonic() - started:.1f}s",
-    )
+            detail = "No applicable checks ran" if not checks else "All checks skipped; see job log"
+    record(entry["name"], status, detail)
     return passed
 
 
@@ -146,12 +168,42 @@ def main(argv: list[str] | None = None) -> int:
         description="Run application CI independently of its provider."
     )
     parser.add_argument(
-        "stage", choices=["setup", "quality", "security", "tests", "all", "summary"]
+        "stage",
+        choices=[
+            "setup",
+            "quality",
+            "security",
+            "tests",
+            "all",
+            "summary",
+            "job",
+            "github-summary",
+        ],
     )
+    parser.add_argument("job", nargs="?")
     args = parser.parse_args(argv)
+    if (args.stage == "job") != (args.job is not None):
+        parser.error("job requires an action; other stages do not accept one")
+    if args.stage == "github-summary":
+        results = json.loads(os.environ["QUALITY_JOB_RESULTS"])
+        if not isinstance(results, dict):
+            raise ValueError("Invalid GitHub job results")
+        report = checked_path(ROOT, REPORT)
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text("")
+        for key, name in JOBS.items():
+            result = results.get(key, {})
+            if not isinstance(result, dict):
+                raise ValueError("Invalid GitHub result: " + key)
+            outputs = result.get("outputs") or {}
+            status = outputs.get("status") if isinstance(outputs, dict) else None
+            if result.get("result") != "success" or status not in {"PASSED", "SKIPPED"}:
+                status = "FAILED"
+            record(name, status, "See individual job log")
+        return 0 if summary() else 1
     if args.stage == "summary":
         return 0 if summary() else 1
-    if args.stage in {"setup", "all"}:
+    if args.stage in {"setup", "all", "job"}:
         report = checked_path(ROOT, REPORT)
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text("")
@@ -164,6 +216,63 @@ def main(argv: list[str] | None = None) -> int:
         summary()
         return 1
     timeout = config.get("timeout_seconds", 1800)
+    if args.stage == "job":
+        actions = {
+            "format-check",
+            "lint",
+            "types",
+            "schemas",
+            "docker",
+            "secrets",
+            "sast",
+            "dependencies",
+            "filesystem",
+        }
+        if args.job not in actions | {"general", "browser"}:
+            raise ValueError("Unknown CI job: " + str(args.job))
+        setup = [
+            {
+                "name": "Restore pinned scanner tools",
+                "cwd": ".",
+                "argv": ["{base_python}", ".quality/install.py", "--restore-tools"],
+            },
+            *(config["setup"] if args.job in {"types", "general", "browser"} else []),
+        ]
+        for entry in setup:
+            if not execute(entry, timeout):
+                summary()
+                return 1
+        report = checked_path(ROOT, REPORT)
+        offset = report.stat().st_size
+        if args.job in actions:
+            entries = [
+                {
+                    "name": args.job,
+                    "cwd": ".",
+                    "argv": [str(ROOT / ".tools/venv/bin/python"), ".quality/run.py", args.job],
+                }
+            ]
+        else:
+            entries = [
+                entry for entry in config["tests"] if entry.get("suite", "general") == args.job
+            ]
+            if not entries:
+                record(args.job + " tests", "SKIPPED", "No reviewed commands configured")
+        failed = False
+        for entry in entries:
+            failed = not execute(entry, timeout) or failed
+        with report.open() as stream:
+            stream.seek(offset)
+            rows = [json.loads(line) for line in stream]
+        status = (
+            "FAILED"
+            if failed
+            else (
+                "SKIPPED" if rows and all(row["status"] == "SKIPPED" for row in rows) else "PASSED"
+            )
+        )
+        checked_path(ROOT, ".tools/ci/job-status.txt").write_text(status + "\n")
+        return 0 if summary() and not failed else 1
     stages = ["setup", "quality", "security", "tests"] if args.stage == "all" else [args.stage]
     failed = False
     for stage in stages:

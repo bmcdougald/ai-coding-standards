@@ -1,15 +1,18 @@
 name: Project quality
 on:
   pull_request:
-    branches: [main, master]
   push:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  quality:
+  format:
+    name: Formatting
     runs-on: ubuntu-latest
-    steps:
+    env: { QUALITY_JOB: format-check }
+    outputs: &outputs
+      status: ${{ steps.result.outputs.status }}
+    steps: &steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
@@ -19,5 +22,105 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '22.22.1'
-      - name: Application quality, security and tests
-        run: python3 .quality/ci.py all
+      - name: Run check
+        run: python3 .quality/ci.py job "$QUALITY_JOB"
+      - name: Record status
+        id: result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" != success ]; then
+            echo 'status=FAILED' >> "$GITHUB_OUTPUT"
+          elif [ -f .tools/ci/job-status.txt ]; then
+            printf 'status=%s\n' "$(cat .tools/ci/job-status.txt)" >> "$GITHUB_OUTPUT"
+          else
+            echo 'status=FAILED' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+  lint:
+    name: Linting
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: lint }
+    outputs: *outputs
+    steps: *steps
+  types:
+    name: Type checks
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: types }
+    outputs: *outputs
+    steps: *steps
+  schemas:
+    name: Schema validation
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: schemas }
+    outputs: *outputs
+    steps: *steps
+  docker:
+    name: Docker checks
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: docker }
+    outputs: *outputs
+    steps: *steps
+  secrets:
+    name: Secret detection
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: secrets }
+    outputs: *outputs
+    steps: *steps
+  sast:
+    name: SAST
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: sast }
+    outputs: *outputs
+    steps: *steps
+  dependencies:
+    name: Dependency vulnerabilities
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: dependencies }
+    outputs: *outputs
+    steps: *steps
+  filesystem:
+    name: Filesystem security
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: filesystem }
+    outputs: *outputs
+    steps: *steps
+  general:
+    name: Unit and integration tests
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: general }
+    outputs: *outputs
+    steps: *steps
+  browser:
+    name: Playwright tests
+    runs-on: ubuntu-latest
+    env: { QUALITY_JOB: browser }
+    outputs: *outputs
+    steps: *steps
+  summary:
+    name: Full CI summary
+    needs:
+      [
+        format,
+        lint,
+        types,
+        schemas,
+        docker,
+        secrets,
+        sast,
+        dependencies,
+        filesystem,
+        general,
+        browser,
+      ]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Publish combined summary
+        env:
+          QUALITY_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 .quality/ci.py github-summary
