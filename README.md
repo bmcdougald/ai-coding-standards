@@ -85,6 +85,9 @@ The bootstrapper creates:
 - Preserved/merged VS Code settings, extension recommendations and **Quality:** tasks.
 - Repository tool configuration, dependency locks, `AGENTS.md` rules and `QUALITY.md` usage.
 
+For a repository that has not yet been set up, run bootstrap without
+`--update-tooling`; that option is only for updating an already installed suite.
+
 Existing conflicting analyzer/hook configuration is never silently overwritten.
 Existing VS Code JSONC comments, values and unrelated tasks are retained.
 Existing TypeScript configuration is retained unchanged; otherwise existing

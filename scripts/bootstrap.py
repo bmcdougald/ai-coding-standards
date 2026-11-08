@@ -581,7 +581,14 @@ def plan_tooling_update(
             "Use its backup restore.json inventory, restore installed tools, then remove "
             "the pending marker: " + str(pending)
         )
-    config = parse_jsonc(safe_tool_path(target, ".quality/config.json").read_text())
+    config_path = safe_tool_path(target, ".quality/config.json")
+    if not config_path.is_file():
+        raise ValueError(
+            "Cannot update tooling: .quality/config.json is missing. "
+            "For a new installation, rerun bootstrap without --update-tooling; "
+            "if this project was previously configured, restore its missing configuration first."
+        )
+    config = parse_jsonc(config_path.read_text())
     latest = json.loads((SOURCE / "templates/quality/versions.json").read_text())
 
     def check_version(name: str, old: str, new: str) -> None:

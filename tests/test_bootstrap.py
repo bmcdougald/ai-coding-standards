@@ -35,6 +35,48 @@ installer = load("quality_installer", ROOT / "templates/quality/install.py")
 
 
 class ToolingUpdateTests(unittest.TestCase):
+    def test_update_new_repo_explains_initial_setup_without_writing(self):
+        git = shutil.which("git")
+        if git is None:
+            self.fail("Git is required")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            subprocess.run([git, "init", "-q", str(root)], check=True)  # noqa: S603
+            (root / "app.py").write_text("value = 1\n")
+            result = subprocess.run(  # noqa: S603 -- fixed CLI and disposable repository
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/bootstrap.py"),
+                    "--target",
+                    str(root),
+                    "--update-tooling",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("rerun bootstrap without --update-tooling", result.stderr)
+            self.assertIn("previously configured", result.stderr)
+            self.assertFalse((root / ".quality").exists())
+            self.assertFalse((root / ".tools").exists())
+            setup = subprocess.run(  # noqa: S603 -- fixed CLI and disposable repository
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/bootstrap.py"),
+                    "--target",
+                    str(root),
+                    "--existing-tools",
+                    "amend",
+                    "--configure-only",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(setup.returncode, 0, setup.stderr)
+            self.assertTrue((root / ".quality/config.json").is_file())
+
     def test_prettier_reference_html_override_is_generated_and_scoped(self):
         node = shutil.which("node")
         if node is None:
